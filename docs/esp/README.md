@@ -1,7 +1,7 @@
 <h1 align="center">Samurai</h1>
 
 <div align="center">
-<img src="https://raw.githubusercontent.com/xscriptor/samurai/main/frontend/src/app/icon.svg" width="43"/> 
+<img src="https://raw.githubusercontent.com/xwebanalysis/samurai/main/frontend/src/app/icon.svg" width="43"/> 
 </div>
 
 > **Idioma:** Esta es la versión en español de la documentación. Para la versión en inglés, consulta [README.md](../../README.md).
