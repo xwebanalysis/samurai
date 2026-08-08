@@ -6,7 +6,7 @@
 
 > **Idioma:** Esta es la versión en español de la documentación. Para la versión en inglés, consulta [README.md](../../README.md).
 
-<p><em><a href="https://github.com/xscriptor/samurai">Samurai</a></em> : <em><a href="https://github.com/xscriptor/xwa">XWA</a>  <strong>submódulo enfocado</strong> en ciberseguridad web — en desarrollo activo</em></p>
+<p><em><a href="https://github.com/xwebanalysis/samurai">Samurai</a></em> : <em><a href="https://github.com/xwebanalysis/meta">XWA</a>  <strong>submódulo enfocado</strong> en ciberseguridad web — en desarrollo activo</em></p>
 
 <img src="https://raw.githubusercontent.com/xscriptor/xassets/main/xwa/samurai/samurai-xwa-screenshot-01.png" alt="Samurai XWA Captura 01" width="100%">
 

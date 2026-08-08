@@ -8,7 +8,7 @@
 **Language / Idioma**  
 [English](#) | [Español](./docs/esp/README.md)
 
-<p><em><a href="https://github.com/xscriptor/samurai">Samurai</a></em> : <em><a href="https://github.com/xscriptor/xwa">XWA</a>  <strong>submodule focused</strong> on web cybersecurity — under active development</em></p>
+<p><em><a href="https://github.com/xwebanalysis/samurai">Samurai</a></em> : <em><a href="https://github.com/xwebanalysis/meta">XWA</a>  <strong>submodule focused</strong> on web cybersecurity — under active development</em></p>
 
 <img src="https://raw.githubusercontent.com/xscriptor/xassets/main/xwa/samurai/samurai-xwa-screenshot-01.png" alt="Samurai XWA Screenshot 01" width="100%">
 
