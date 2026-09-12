@@ -1,54 +1,31 @@
-import { Component, OnDestroy, ChangeDetectorRef, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { HttpClient } from '@angular/common/http';
+import { ChangeDetectorRef, Component, OnDestroy, OnInit } from '@angular/core';
 import { ActivatedRoute } from '@angular/router';
-import { forkJoin } from 'rxjs';
+import { forkJoin, Subscription } from 'rxjs';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { gzip } from 'pako';
+
+import { ApiService, SamuraiEvent, ScanDetail, ScanListItem } from '../../core/api.service';
+import { LiveService } from '../../core/live.service';
+import {
+  OpenPortDetail,
+  contactProgressFromEvent,
+  openPortDetailFromLogLine,
+  openPortFromEvent,
+  openPortFromPayload,
+  openPortTokenFromLogLine,
+  scanIdFromLogLine,
+  unsanitizedFromEvent
+} from '../../core/live-events';
+import { TranslationService } from '../../core/i18n.service';
+import { TranslatePipe } from '../../core/translate.pipe';
+import { ExportActionsComponent } from '../../shared/export-actions/export-actions.component';
+import { TerminalComponent } from '../../shared/terminal/terminal.component';
 import { ScannerTargetConfigComponent } from './components/target-config/scanner-target-config.component';
 import { ScannerMetricsComponent } from './components/metrics/scanner-metrics.component';
 import { ScannerHistoryComponent } from './components/history/scanner-history.component';
-import { ScannerTerminalComponent } from './components/terminal/scanner-terminal.component';
-import { ScannerExportActionsComponent } from './components/export-actions/scanner-export-actions.component';
 import { ScannerReportComponent } from './components/report/scanner-report.component';
-import { TranslatePipe } from '../../pipes/translate.pipe';
-import { TranslationService } from '../../services/translation.service';
-
-interface ScanListItem {
-  id: number;
-  scan_type?: string;
-  created_at?: string;
-  domain_target?: string;
-  status?: string;
-}
-
-interface FindingItem {
-  id?: number;
-  scan_id?: number;
-  link_id?: number | null;
-  severity: string;
-  finding_type: string;
-  description: string;
-  poc_payload?: string | null;
-  cvss_score?: string | null;
-}
-
-interface ScanDetailItem {
-  id: number;
-  domain_target: string;
-  status: string;
-  scan_type: string;
-  created_at?: string;
-  findings?: FindingItem[];
-  discovered_links: Array<{
-    id: number;
-    url: string;
-    status_code: number;
-    content_type: string;
-    findings: FindingItem[];
-  }>;
-}
 
 interface ScannerHistoryItem {
   id: number;
@@ -60,13 +37,7 @@ interface ScannerHistoryItem {
   createdAt: string;
 }
 
-interface ScannerOpenPortItem {
-  token: string;
-  service: string;
-  version: string;
-}
-
-interface ScannerExportRow {
+export interface ScannerExportRow {
   node_type: 'global' | 'link';
   host: string;
   url: string;
@@ -79,7 +50,7 @@ interface ScannerExportRow {
   poc_payload: string;
 }
 
-interface ScannerReportExportSnapshot {
+export interface ScannerReportExportSnapshot {
   rows: ScannerExportRow[];
   hasActiveFilters: boolean;
   filters: {
@@ -98,9 +69,9 @@ interface ScannerReportExportSnapshot {
     ScannerTargetConfigComponent,
     ScannerMetricsComponent,
     ScannerHistoryComponent,
-    ScannerTerminalComponent,
-    ScannerExportActionsComponent,
     ScannerReportComponent,
+    TerminalComponent,
+    ExportActionsComponent,
     TranslatePipe
   ],
   templateUrl: './scanner.component.html',
@@ -115,7 +86,6 @@ export class ScannerComponent implements OnInit, OnDestroy {
   detectUnsanitizedInputs = true;
   webMaxPages = 12;
   isScanning = false;
-  socket: WebSocket | null = null;
   terminalLogs: string[] = ['[ SYSTEM READY ] Waiting for target config...'];
 
   vulnerabilitiesFound = 0;
@@ -124,15 +94,23 @@ export class ScannerComponent implements OnInit, OnDestroy {
   currentScanId: number | null = null;
   latestOpenPortDelta: number | null = null;
   scannerHistory: ScannerHistoryItem[] = [];
-  openPortsDetailed: ScannerOpenPortItem[] = [];
-  currentScanDetail: ScanDetailItem | null = null;
+  openPortsDetailed: OpenPortDetail[] = [];
+  currentScanDetail: ScanDetail | null = null;
   filteredExportRows: ScannerExportRow[] | null = null;
   reportFilterSnapshot: ScannerReportExportSnapshot['filters'] | null = null;
   reportHasActiveFilters = false;
+
   private openPortsSet = new Set<string>();
+  private liveSub: Subscription | null = null;
   private readonly maxTerminalLines = 1200;
 
-  constructor(private cdr: ChangeDetectorRef, private http: HttpClient, private route: ActivatedRoute, public translationService: TranslationService) {}
+  constructor(
+    private cdr: ChangeDetectorRef,
+    private api: ApiService,
+    private live: LiveService,
+    private route: ActivatedRoute,
+    public translationService: TranslationService
+  ) {}
 
   ngOnInit() {
     this.loadScannerHistory();
@@ -163,57 +141,32 @@ export class ScannerComponent implements OnInit, OnDestroy {
     this.currentScanDetail = null;
     this.openPortsSet.clear();
     this.openPortsDetailed = [];
-    this.cdr.detectChanges();
+    this.cdr.markForCheck();
 
-    const wsParams = new URLSearchParams({
+    const wsUrl = this.api.scannerLiveUrl({
       target: this.targetDomain,
       profile: this.scanProfile,
-      timeout: String(this.scanTimeout),
-      web_scan: String(this.webAppSurfaceScan),
-      collect_contacts: String(this.collectContactIntel),
-      scan_unsanitized: String(this.detectUnsanitizedInputs),
-      max_pages: String(this.webMaxPages)
+      timeout: this.scanTimeout,
+      webScan: this.webAppSurfaceScan,
+      collectContacts: this.collectContactIntel,
+      scanUnsanitized: this.detectUnsanitizedInputs,
+      maxPages: this.webMaxPages
     });
-    const wsUrl = `ws://${window.location.hostname}:8000/api/scan/live?${wsParams.toString()}`;
-    this.socket = new WebSocket(wsUrl);
 
-    this.socket.onmessage = (event) => {
-      console.log("WS SCAN MESSAGE:", event.data);
-      this.terminalLogs.push(event.data);
-
-      if (this.terminalLogs.length > this.maxTerminalLines) {
-        this.terminalLogs = this.terminalLogs.slice(-this.maxTerminalLines);
+    this.liveSub = this.live.open(wsUrl).subscribe({
+      next: (event) => {
+        this.handleScannerEvent(event);
+        this.cdr.markForCheck();
+      },
+      error: () => {
+        this.terminalLogs.push('[!] WEBSOCKET CONNECTION ERROR.');
+        this.finishScan();
+      },
+      complete: () => {
+        this.terminalLogs.push('[!] CONNECTION CLOSED. Scan finished.');
+        this.finishScan();
       }
-
-      this.captureScanMetadata(event.data);
-      this.captureWebFindings(event.data);
-      this.captureOpenPortDetails(event.data);
-
-      const parsedPort = this.extractOpenPortToken(event.data);
-      if (parsedPort) {
-        this.openPortsSet.add(parsedPort);
-        this.vulnerabilitiesFound = this.openPortsSet.size;
-      }
-      this.cdr.detectChanges();
-    };
-
-    this.socket.onclose = () => {
-      console.log("WS SCAN CLOSED");
-      this.terminalLogs.push('[!] CONNECTION CLOSED. Scan finished.');
-      this.isScanning = false;
-      if (this.currentScanId) {
-        this.loadCurrentScanDetail(this.currentScanId);
-      }
-      this.loadScannerHistory();
-      this.cdr.detectChanges();
-    };
-
-    this.socket.onerror = (err) => {
-      console.log("WS SCAN ERROR:", err);
-      this.terminalLogs.push('[!] WEBSOCKET CONNECTION ERROR.');
-      this.isScanning = false;
-      this.cdr.detectChanges();
-    };
+    });
   }
 
   selectScannerHistoryRun(scanId: number) {
@@ -224,14 +177,14 @@ export class ScannerComponent implements OnInit, OnDestroy {
   cancelScan() {
     if (!this.currentScanId || !this.isScanning) return;
 
-    this.http.post(`http://${window.location.hostname}:8000/api/scan/cancel/${this.currentScanId}`, {}).subscribe({
+    this.api.cancelScan(this.currentScanId).subscribe({
       next: () => {
         this.terminalLogs.push(`[!] Cancellation requested for scan #${this.currentScanId}`);
-        this.cdr.detectChanges();
+        this.cdr.markForCheck();
       },
       error: () => {
         this.terminalLogs.push('[!] Failed to cancel scan.');
-        this.cdr.detectChanges();
+        this.cdr.markForCheck();
       }
     });
   }
@@ -253,7 +206,18 @@ export class ScannerComponent implements OnInit, OnDestroy {
 
   exportScannerAsCsv() {
     const rows = this.flattenScannerExportRows();
-    const headers = ['node_type', 'host', 'url', 'status_code', 'content_type', 'finding_type', 'severity', 'cvss_score', 'description', 'poc_payload'];
+    const headers = [
+      'node_type',
+      'host',
+      'url',
+      'status_code',
+      'content_type',
+      'finding_type',
+      'severity',
+      'cvss_score',
+      'description',
+      'poc_payload'
+    ];
     const csvLines = [headers.join(',')];
 
     rows.forEach((row) => {
@@ -315,95 +279,98 @@ export class ScannerComponent implements OnInit, OnDestroy {
   }
 
   ngOnDestroy() {
-    if (this.socket) {
-      this.socket.close();
+    this.liveSub?.unsubscribe();
+  }
+
+  private finishScan() {
+    this.isScanning = false;
+    if (this.currentScanId) {
+      this.loadCurrentScanDetail(this.currentScanId);
     }
+    this.loadScannerHistory();
+    this.cdr.markForCheck();
   }
 
-  private extractOpenPortToken(line: string) {
-    const match = line.match(/^(\d+)\/(tcp|udp)\s+open\b/i);
-    if (!match) return null;
-    return `${match[1]}/${match[2].toLowerCase()}`;
-  }
+  private handleScannerEvent(event: SamuraiEvent) {
+    const scanId = Number(event.analysis_id);
+    if (Number.isFinite(scanId) && scanId > 0) {
+      this.currentScanId = scanId;
+    }
 
-  private captureOpenPortDetails(line: string) {
-    const detailedMatch = line.match(/^\[OPEN_PORT\]\s+(\d+)\/(tcp|udp)\s+(\S+)\s+(.+)$/i);
-    if (detailedMatch) {
-      const token = `${detailedMatch[1]}/${detailedMatch[2].toLowerCase()}`;
-      const service = detailedMatch[3].trim();
-      const version = detailedMatch[4].trim();
-      if (!this.openPortsDetailed.some((item) => item.token === token)) {
-        this.openPortsDetailed.push({ token, service, version });
+    switch (event.type) {
+      case 'log': {
+        const line = String(event.payload?.line ?? '');
+        this.pushTerminalLine(line);
+        this.captureLegacyLogLine(line);
+        break;
       }
-      return;
-    }
-
-    const summaryMatch = line.match(/^\s+-\s+(\d+)\/(tcp|udp)\s+\|\s+(.+?)\s+\|\s+(.+)$/i);
-    if (summaryMatch) {
-      const token = `${summaryMatch[1]}/${summaryMatch[2].toLowerCase()}`;
-      const service = summaryMatch[3].trim();
-      const version = summaryMatch[4].trim();
-      if (!this.openPortsDetailed.some((item) => item.token === token)) {
-        this.openPortsDetailed.push({ token, service, version });
+      case 'analysis_progress': {
+        const contact = contactProgressFromEvent(event);
+        if (contact) {
+          this.contactsFound += contact.total;
+          this.pushTerminalLine(
+            `    [WEB_CONTACT] ${contact.url} emails=${contact.emails} phones=${contact.phones}`
+          );
+        }
+        break;
       }
-    }
-  }
+      case 'item_found': {
+        const openPort = openPortFromEvent(event);
+        if (openPort) {
+          this.openPortsSet.add(openPort.token);
+          this.vulnerabilitiesFound = this.openPortsSet.size;
+          if (!this.openPortsDetailed.some((entry) => entry.token === openPort.token)) {
+            this.openPortsDetailed.push(openPort);
+          }
+          this.pushTerminalLine(
+            `[OPEN_PORT] ${openPort.token} ${openPort.service} ${openPort.version}`
+          );
+          break;
+        }
 
-  private captureScanMetadata(line: string) {
-    const match = line.match(/^\[SCAN_META\]\s*scan_id=(\d+)/i);
-    if (!match) return;
-    this.currentScanId = Number(match[1]);
-  }
-
-  private loadCurrentScanDetail(scanId: number) {
-    this.http.get<ScanDetailItem>(`http://${window.location.hostname}:8000/api/scans/${scanId}`).subscribe({
-      next: (detail) => {
-        this.currentScanDetail = detail;
-        this.currentScanId = detail.id;
-        const findings = detail.findings || [];
-        this.vulnerabilitiesFound = findings.filter((finding) => finding.finding_type === 'OPEN_PORT').length;
-        this.contactsFound = findings.filter((finding) => finding.finding_type === 'CONTACT_INFO_DISCLOSURE').length;
-        this.unsanitizedFindings = findings.filter((finding) => finding.finding_type === 'UNSANITIZED_INPUT_CANDIDATE' || finding.finding_type === 'REFLECTED_INPUT_ECHO').length;
-        this.openPortsDetailed = (detail.findings || [])
-          .filter((finding) => finding.finding_type === 'OPEN_PORT')
-          .map((finding) => ({
-            token: this.getPortTokenFromPayload(finding.poc_payload),
-            service: this.getServiceFromPayload(finding.poc_payload),
-            version: this.getVersionFromPayload(finding.poc_payload)
-          }));
-        this.terminalLogs.push(`[REPORT] Detailed report loaded: links=${detail.discovered_links.length} | findings=${(detail.findings || []).length}`);
-        this.cdr.detectChanges();
-      },
-      error: () => {
-        this.terminalLogs.push('[!] Unable to load detailed scan report.');
-        this.cdr.detectChanges();
+        const unsanitized = unsanitizedFromEvent(event);
+        if (unsanitized) {
+          this.unsanitizedFindings += unsanitized.reflected ? 1 : unsanitized.forms;
+          this.pushTerminalLine(
+            `    [WEB_UNSANITIZED] ${unsanitized.url} ${
+              unsanitized.reflected ? 'reflected=true' : `forms=${unsanitized.forms}`
+            }`
+          );
+        }
+        break;
       }
-    });
-  }
-
-  private getPortTokenFromPayload(payload: string | null | undefined) {
-    if (!payload) return 'n/a';
-    const portMatch = payload.match(/port=(\d+)/i);
-    const protoMatch = payload.match(/protocol=(tcp|udp)/i);
-    if (portMatch && protoMatch) {
-      return `${portMatch[1]}/${protoMatch[1].toLowerCase()}`;
+      case 'analysis_error': {
+        const error = event.payload?.error;
+        this.pushTerminalLine(`[!] ${error?.message || 'Analysis error'}`);
+        break;
+      }
+      default:
+        break;
     }
-    return 'n/a';
   }
 
-  private getServiceFromPayload(payload: string | null | undefined) {
-    if (!payload) return 'n/a';
-    const serviceMatch = payload.match(/service=([^\n]+)/i);
-    return serviceMatch ? serviceMatch[1].trim() : 'n/a';
+  /** Legacy plain-text fallbacks for old backend builds. */
+  private captureLegacyLogLine(line: string) {
+    const detailed = openPortDetailFromLogLine(line);
+    if (detailed && !this.openPortsDetailed.some((entry) => entry.token === detailed.token)) {
+      this.openPortsDetailed.push(detailed);
+    }
+
+    const portToken = openPortTokenFromLogLine(line);
+    if (portToken) {
+      this.openPortsSet.add(portToken);
+      this.vulnerabilitiesFound = this.openPortsSet.size;
+    }
+
+    const scanId = scanIdFromLogLine(line);
+    if (scanId) {
+      this.currentScanId = scanId;
+    }
+
+    this.captureLegacyWebFindings(line);
   }
 
-  private getVersionFromPayload(payload: string | null | undefined) {
-    if (!payload) return 'n/a';
-    const versionMatch = payload.match(/version=([^\n]+)/i);
-    return versionMatch ? versionMatch[1].trim() : 'n/a';
-  }
-
-  private captureWebFindings(line: string) {
+  private captureLegacyWebFindings(line: string) {
     if (line.includes('[WEB_CONTACT]')) {
       const emails = Number((line.match(/emails=(\d+)/i) || [])[1] || '0');
       const phones = Number((line.match(/phones=(\d+)/i) || [])[1] || '0');
@@ -417,25 +384,66 @@ export class ScannerComponent implements OnInit, OnDestroy {
     }
   }
 
+  private pushTerminalLine(line: string) {
+    if (line === undefined || line === null) return;
+    this.terminalLogs.push(line);
+    if (this.terminalLogs.length > this.maxTerminalLines) {
+      this.terminalLogs = this.terminalLogs.slice(-this.maxTerminalLines);
+    }
+  }
+
+  private loadCurrentScanDetail(scanId: number) {
+    this.api.getScan(scanId).subscribe({
+      next: (detail) => {
+        this.currentScanDetail = detail;
+        this.currentScanId = detail.id;
+        const findings = detail.findings || [];
+        this.vulnerabilitiesFound = findings.filter((finding) => finding.finding_type === 'OPEN_PORT').length;
+        this.contactsFound = findings.filter((finding) => finding.finding_type === 'CONTACT_INFO_DISCLOSURE').length;
+        this.unsanitizedFindings = findings.filter(
+          (finding) =>
+            finding.finding_type === 'UNSANITIZED_INPUT_CANDIDATE' ||
+            finding.finding_type === 'REFLECTED_INPUT_ECHO'
+        ).length;
+        this.openPortsDetailed = findings
+          .filter((finding) => finding.finding_type === 'OPEN_PORT')
+          .map((finding) => openPortFromPayload(finding.poc_payload));
+        this.terminalLogs.push(
+          `[REPORT] Detailed report loaded: links=${detail.discovered_links.length} | findings=${findings.length}`
+        );
+        this.cdr.markForCheck();
+      },
+      error: () => {
+        this.terminalLogs.push('[!] Unable to load detailed scan report.');
+        this.cdr.markForCheck();
+      }
+    });
+  }
+
   private loadScannerHistory() {
-    this.http.get<ScanListItem[]>(`http://${window.location.hostname}:8000/api/scans`).subscribe({
+    this.api.listScans().subscribe({
       next: (scans) => {
-        const scannerRuns = (scans || []).filter((s) => (s.scan_type || '').startsWith('port_scan')).slice(0, 6);
+        const scannerRuns = (scans || [])
+          .filter((s) => (s.scan_type || '').startsWith('port_scan'))
+          .slice(0, 6);
         if (!scannerRuns.length) {
           this.scannerHistory = [];
           this.latestOpenPortDelta = null;
-          this.cdr.detectChanges();
+          this.cdr.markForCheck();
           return;
         }
 
-        const requests = scannerRuns.map((s) => this.http.get<ScanDetailItem>(`http://${window.location.hostname}:8000/api/scans/${s.id}`));
-        forkJoin(requests).subscribe({
+        forkJoin(scannerRuns.map((s) => this.api.getScan(s.id))).subscribe({
           next: (details) => {
             this.scannerHistory = details.map((detail) => {
               const findings = detail.findings || [];
               const openPorts = findings.filter((f) => f.finding_type === 'OPEN_PORT').length;
               const contacts = findings.filter((f) => f.finding_type === 'CONTACT_INFO_DISCLOSURE').length;
-              const unsanitized = findings.filter((f) => f.finding_type === 'UNSANITIZED_INPUT_CANDIDATE' || f.finding_type === 'REFLECTED_INPUT_ECHO').length;
+              const unsanitized = findings.filter(
+                (f) =>
+                  f.finding_type === 'UNSANITIZED_INPUT_CANDIDATE' ||
+                  f.finding_type === 'REFLECTED_INPUT_ECHO'
+              ).length;
               return {
                 id: detail.id,
                 target: detail.domain_target,
@@ -447,25 +455,24 @@ export class ScannerComponent implements OnInit, OnDestroy {
               };
             });
 
-            if (this.scannerHistory.length > 1) {
-              this.latestOpenPortDelta = this.scannerHistory[0].openPorts - this.scannerHistory[1].openPorts;
-            } else {
-              this.latestOpenPortDelta = null;
-            }
+            this.latestOpenPortDelta =
+              this.scannerHistory.length > 1
+                ? this.scannerHistory[0].openPorts - this.scannerHistory[1].openPorts
+                : null;
 
-            this.cdr.detectChanges();
+            this.cdr.markForCheck();
           },
           error: () => {
             this.scannerHistory = [];
             this.latestOpenPortDelta = null;
-            this.cdr.detectChanges();
+            this.cdr.markForCheck();
           }
         });
       },
       error: () => {
         this.scannerHistory = [];
         this.latestOpenPortDelta = null;
-        this.cdr.detectChanges();
+        this.cdr.markForCheck();
       }
     });
   }

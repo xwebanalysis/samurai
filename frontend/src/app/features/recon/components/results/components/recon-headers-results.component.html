@@ -20,7 +20,7 @@
       <div class="description">{{ 'hardening opportunity' | t }}</div>
     </div>
 
-    <div *ngIf="headers.recommendations?.length" class="recommendations">
+    <div *ngIf="headers.recommendations.length" class="recommendations">
       <div class="recommendations-title">{{ 'recommendations' | t }}</div>
       <div *ngFor="let recommendation of headers.recommendations" class="recommendation-item">{{ recommendation }}</div>
     </div>

@@ -1,39 +1,18 @@
+import type {
+  DiscoveredLink as CoreDiscoveredLink,
+  Finding as CoreFinding,
+  ScanDetail as CoreScanDetail,
+  ScanListItem as CoreScanListItem
+} from '../../../core/api.service';
+
+// Canonical REST shapes live in core/api.service; the feature re-exports them
+// so scan-detail input bindings match the ApiService observables exactly.
+export type Finding = CoreFinding;
+export type DiscoveredLink = CoreDiscoveredLink;
+export type ScanDetail = CoreScanDetail;
+export type ScanListItem = CoreScanListItem;
+
 export type SeverityLevel = 'critical' | 'high' | 'medium' | 'low' | 'info';
-
-export interface Finding {
-  id: number;
-  scan_id: number;
-  link_id: number | null;
-  severity: SeverityLevel;
-  finding_type: string;
-  description: string;
-  cvss_score: string | null;
-  poc_payload: string | null;
-}
-
-export interface DiscoveredLink {
-  id: number;
-  scan_id: number;
-  url: string;
-  status_code: number;
-  content_type: string;
-  findings: Finding[];
-}
-
-export interface ScanDetail {
-  id: number;
-  domain_target: string;
-  status: string;
-  scan_type: string;
-  created_at: string;
-  findings?: Finding[];
-  discovered_links: DiscoveredLink[];
-}
-
-export interface ScanListItem {
-  id: number;
-  created_at?: string;
-}
 
 export interface TrendSnapshot {
   id: number;

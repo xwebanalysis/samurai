@@ -6,11 +6,12 @@
 
   <div class="summary-layout">
     <article class="hero-module dot-grid-subtle">
-      <span class="t-label">{{ 'TOTAL FINDINGS' | t }}</span>
-      <div class="hero-row">
-        <span class="t-display-lg t-data" [attr.aria-label]="('Total findings: ' | t) + summary.totalFindings">{{ summary.totalFindings }}</span>
-        <span class="hero-unit t-label">{{ 'ISSUES' | t }}</span>
-      </div>
+      <app-metric-card
+        label="TOTAL FINDINGS"
+        [value]="summary.totalFindings"
+        unit="ISSUES"
+        [ariaLabel]="('Total findings: ' | t) + summary.totalFindings"
+      ></app-metric-card>
       <div class="segment-line">
         <span class="segment" *ngFor="let segment of totalFindingsSegments" [class.filled]="segment" [class.neutral]="segment"></span>
       </div>

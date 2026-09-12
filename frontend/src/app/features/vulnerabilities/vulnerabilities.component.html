@@ -26,11 +26,13 @@
       (initiate)="initiateCrawl()"
     ></app-vuln-target-config>
 
-    <app-vuln-terminal-output
-      [title]="'DAST_ENGINE_STDOUT'"
-      [terminalLogs]="terminalLogs"
+    <app-terminal
+      title="DAST_ENGINE_STDOUT"
+      [logs]="terminalLogs"
       [isScanning]="isScanning"
-    ></app-vuln-terminal-output>
+      ariaLabel="DAST terminal output"
+      [height]="300"
+    ></app-terminal>
 
     <app-vuln-analysis-summary
       [summary]="analysisSummary"

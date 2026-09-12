@@ -38,8 +38,8 @@
   <tr>
     <td><strong>Samurai Web</strong></td>
     <td><code>/frontend</code> + <code>/backend</code></td>
-    <td>Angular 21 + FastAPI/Python</td>
-    <td>Aplicación web (Docker)</td>
+    <td>Angular 21 + FastAPI/Python 3.13</td>
+    <td>Aplicación web (<strong>100% local, SQLite por defecto</strong>)</td>
   </tr>
   <tr>
     <td><strong>Samurai TUI</strong></td>
@@ -60,17 +60,25 @@
 
 <h3>Exportación de Base de Datos y Compatibilidad Cruzada</h3>
 <p>El backend web exporta la base de datos mediante <code>GET /api/database/export/raw</code> (JSON) y <code>POST /api/database/export/encrypted</code> (binario AES-256-GCM). La TUI exporta mediante la pestaña <strong>Export</strong> usando el mismo formato de cifrado (<code>SAMURAI_DB_EXPORT_V1</code>). Ambas interfaces comparten esquemas de tabla idénticos (<code>scans</code>, <code>findings</code>, <code>discovered_links</code>).</p>
-<p>Cuando ambas apuntan a la misma base de datos PostgreSQL, las exportaciones son innecesarias: los escaneos aparecen automáticamente en ambas interfaces. La TUI también puede funcionar de forma independiente con SQLite, almacenando datos localmente en <code>samurai.db</code>.</p>
+<p>Cuando ambas apuntan a la misma base de datos (SQLite o PostgreSQL), las exportaciones son innecesarias: los escaneos aparecen automáticamente en ambas interfaces. La TUI también puede funcionar de forma independiente con SQLite, almacenando datos localmente en <code>samurai.db</code>. El esquema de tablas y el formato cifrado están congelados para mantener compatibilidad con la TUI.</p>
 
 <hr>
 
 <h2>Inicio Rápido</h2>
 
-<h3>Versión Web (Docker Compose)</h3>
-<pre><code>docker compose up -d --build</code></pre>
+<h3>Versión Web (Local — SQLite, sin Docker)</h3>
+<pre><code>./samurai.sh          # o: ./samurai.sh local</code></pre>
 <ul>
   <li>Frontend: <code>http://localhost:4200</code></li>
   <li>Documentación API: <code>http://localhost:8000/docs</code></li>
+  <li>Base de datos: <code>&lt;repo&gt;/samurai.db</code></li>
+</ul>
+
+<h3>Versión Web (Docker Compose + PostgreSQL)</h3>
+<pre><code>./samurai.sh docker</code></pre>
+<ul>
+  <li>Frontend: <code>http://localhost:4200</code></li>
+  <li>Backend: <code>DB_DRIVER=postgresql</code> contra PostgreSQL 17</li>
 </ul>
 
 <h3>Versión de Terminal (Independiente)</h3>
@@ -124,7 +132,8 @@ docker compose up --build
 │       ├── db/            # SQLx de doble backend (Postgres + SQLite)
 │       └── tui/           # Interfaz de terminal Nothing Design
 ├── docs/                  # Documentación técnica
-└── docker-compose.yml     # 4 servicios: frontend, backend, redis, postgres
+├── samurai.sh             # Lanzador: local (por defecto) | docker
+└── docker-compose.yml     # 3 servicios: frontend, backend (postgresql), postgres 17
 </code></pre>
 
 <div id="x" align="center">

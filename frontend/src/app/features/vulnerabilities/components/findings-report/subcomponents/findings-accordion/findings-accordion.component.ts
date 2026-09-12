@@ -1,7 +1,7 @@
 import { Component, Input } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { FindingItemComponent } from '../finding-item/finding-item.component';
-import { TranslatePipe } from '../../../../../../pipes/translate.pipe';
+import { TranslatePipe } from '../../../../../../core/translate.pipe';
+import { FindingsListComponent } from '../../../../../../shared/findings-list/findings-list.component';
 import { DiscoveredLink, Finding } from '../../../../models/vulnerabilities.models';
 
 export type FindingsNode = DiscoveredLink & { isGlobal: boolean };
@@ -9,7 +9,7 @@ export type FindingsNode = DiscoveredLink & { isGlobal: boolean };
 @Component({
   selector: 'app-findings-accordion',
   standalone: true,
-  imports: [CommonModule, FindingItemComponent, TranslatePipe],
+  imports: [CommonModule, FindingsListComponent, TranslatePipe],
   templateUrl: './findings-accordion.component.html',
   styleUrls: ['./findings-accordion.component.scss']
 })

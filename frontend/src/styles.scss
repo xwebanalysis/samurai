@@ -1,3 +1,7 @@
+/* Self-hosted fonts: woff2 files live in public/fonts, @font-face lives here
+ * so the Angular build compiles it into the global stylesheet. */
+@use 'fonts';
+
 /*====================================
  * NOTHING DESIGN SYSTEM - TOKENS
  *====================================*/
@@ -48,6 +52,8 @@
   --success: #4A9E5C;
   --warning: #D4A843;
   --error: #D71921;
+  /* Highlight gold (hover/emphasis), tokenized to end hardcoded #FFD700. */
+  --gold: #FFD700;
 }
 
 /* Light Theme overrides (Printed Technical Manual) */
@@ -88,7 +94,7 @@ body.theme-transitioning,
 body.theme-transitioning *,
 body.theme-transitioning *::before,
 body.theme-transitioning *::after {
-  transition-property: background-color, color, border-color, fill, stroke, box-shadow;
+  transition-property: background-color, color, border-color, fill, stroke;
   transition-duration: 0.26s;
   transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
 }
@@ -108,6 +114,7 @@ body.theme-transitioning *::after {
 .text-accent { color: var(--accent); }
 .text-success { color: var(--success); }
 .text-warning { color: var(--warning); }
+.text-gold { color: var(--gold); }
 
 /* Dot-Matrix Motif */
 .dot-grid {

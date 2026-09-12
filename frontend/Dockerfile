@@ -1,10 +1,10 @@
-FROM node:20
+FROM node:24
 
 WORKDIR /app
 
 COPY package*.json ./
 
-RUN npm install
+RUN npm ci
 
 # Copiamos el resto (aunque usemos volumen, esto asegura tener un base layer)
 COPY . .

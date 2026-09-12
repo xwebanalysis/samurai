@@ -18,16 +18,24 @@
     (clear)="clearTerminal()"
   ></app-recon-controls>
 
-  <app-recon-terminal [lines]="terminalLines" [isScanning]="isScanning"></app-recon-terminal>
+  <app-terminal
+    [logs]="terminalLines"
+    [isScanning]="isScanning"
+    [showStatus]="true"
+    title="[ X OUTPUT ]"
+    ariaLabel="Recon terminal output"
+    [height]="400"
+  ></app-terminal>
 
   <section class="recon-actions-zone" *ngIf="reconResults">
-    <app-recon-export-actions
-      [hasExports]="!!reconResults"
+    <app-export-actions
+      [visible]="!!reconResults"
+      ariaContext="reconnaissance results"
       (exportCsv)="exportReconAsCsv()"
       (exportJson)="exportReconAsJson()"
       (exportPdf)="exportReconAsPdf()"
       (exportBinary)="exportReconAsBinary()"
-    ></app-recon-export-actions>
+    ></app-export-actions>
 
     <div class="recon-filter-zone">
       <span class="t-label">{{ '[ RESULT VIEW ]' | t }}</span>

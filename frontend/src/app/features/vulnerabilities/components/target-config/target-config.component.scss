@@ -44,7 +44,7 @@
 
 .auth-config {
   border: 1px dashed var(--border-visible);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.03) 0%, rgba(255, 255, 255, 0.01) 100%);
+  background: var(--surface);
   padding: var(--space-md);
   display: flex;
   flex-direction: column;

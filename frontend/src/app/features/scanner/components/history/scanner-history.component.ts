@@ -1,6 +1,6 @@
 import { Component, EventEmitter, Input, Output } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { TranslatePipe } from '../../../../pipes/translate.pipe';
+import { TranslatePipe } from '../../../../core/translate.pipe';
 
 @Component({
   selector: 'app-scanner-history',

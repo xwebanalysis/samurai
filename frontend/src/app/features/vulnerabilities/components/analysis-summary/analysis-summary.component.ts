@@ -1,12 +1,13 @@
 import { Component, Input } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { TranslatePipe } from '../../../../pipes/translate.pipe';
+import { TranslatePipe } from '../../../../core/translate.pipe';
+import { MetricCardComponent } from '../../../../shared/metric-card/metric-card.component';
 import { AnalysisSummary, TrendSnapshot } from '../../models/vulnerabilities.models';
 
 @Component({
   selector: 'app-vuln-analysis-summary',
   standalone: true,
-  imports: [CommonModule, TranslatePipe],
+  imports: [CommonModule, TranslatePipe, MetricCardComponent],
   templateUrl: './analysis-summary.component.html',
   styleUrls: ['./analysis-summary.component.scss']
 })

@@ -1,9 +1,9 @@
 import { CommonModule } from '@angular/common';
 import { Component, OnInit } from '@angular/core';
 import { RouterModule } from '@angular/router';
-import { ThemeService } from './services/theme.service';
-import { TranslationService } from './services/translation.service';
-import { TranslatePipe } from './pipes/translate.pipe';
+import { ThemeService } from './core/theme.service';
+import { TranslationService } from './core/i18n.service';
+import { TranslatePipe } from './core/translate.pipe';
 
 @Component({
   selector: 'app-root',

@@ -1,0 +1,58 @@
+.export-actions {
+  display: flex;
+  gap: var(--space-sm);
+  justify-content: flex-start;
+  flex-wrap: wrap;
+
+  &.align-end {
+    justify-content: flex-end;
+  }
+}
+
+.export-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--border-visible);
+  background-color: transparent;
+  color: var(--text-secondary);
+  padding: var(--space-sm) var(--space-md);
+  font-family: var(--font-data);
+  font-size: var(--label);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  min-height: 40px;
+  cursor: pointer;
+  transition:
+    color 0.2s cubic-bezier(0.25, 0.1, 0.25, 1),
+    border-color 0.2s cubic-bezier(0.25, 0.1, 0.25, 1);
+
+  .export-icon {
+    width: 16px;
+    height: 16px;
+    fill: currentColor;
+    flex-shrink: 0;
+  }
+
+  &:hover {
+    color: var(--gold);
+    border-color: var(--gold);
+    opacity: 1;
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--interactive);
+    outline-offset: 2px;
+  }
+
+  &:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+}
+
+@media (max-width: 900px) {
+  .export-actions {
+    justify-content: center;
+  }
+}
