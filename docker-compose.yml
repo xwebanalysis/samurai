@@ -18,24 +18,17 @@ services:
     volumes:
       - ./backend/app:/app/app
     environment:
-      - REDIS_URL=redis://redis:6379/0
+      - DB_DRIVER=postgresql
       - DB_HOST=db
       - DB_NAME=samurai
       - DB_USER=postgres
       - DB_PASS=postgres
     depends_on:
-      redis:
-        condition: service_started
       db:
         condition: service_healthy
 
-  redis:
-    image: "redis:alpine"
-    ports:
-      - "6379:6379"
-
   db:
-    image: postgres:15-alpine
+    image: postgres:17-alpine
     environment:
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=postgres

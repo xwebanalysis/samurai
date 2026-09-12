@@ -63,7 +63,7 @@
                     <summary [attr.aria-label]="'Show findings for ' + link.url">
                         <span class="t-label">{{link.status_code}} HTTP</span>
                         <span class="t-body">{{link.url}}</span>
-                        <span class="badge warning" *ngIf="link.findings?.length">! {{link.findings.length}} Issues</span>
+                        <span class="badge warning" *ngIf="link.findings.length">! {{link.findings.length}} Issues</span>
                     </summary>
                     <div class="accordion-content">
                         <span class="t-label text-secondary">Content-Type: {{link.content_type}}</span>

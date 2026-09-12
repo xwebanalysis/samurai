@@ -1,38 +1,27 @@
 import { ChangeDetectorRef, Component, OnDestroy, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { HttpClient } from '@angular/common/http';
 import { ActivatedRoute } from '@angular/router';
-import { TranslatePipe } from '../../pipes/translate.pipe';
+import { Subscription } from 'rxjs';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { gzip } from 'pako';
+
+import { ApiService, ScanDetail } from '../../core/api.service';
+import { LiveService } from '../../core/live.service';
+import { reconResultsFromEvent, terminalLineFromEvent } from '../../core/live-events';
+import { TranslationService } from '../../core/i18n.service';
+import { TranslatePipe } from '../../core/translate.pipe';
+import { ExportActionsComponent } from '../../shared/export-actions/export-actions.component';
+import { TerminalComponent } from '../../shared/terminal/terminal.component';
 import { ReconControlsComponent } from './components/controls/recon-controls.component';
-import { ReconTerminalComponent } from './components/terminal/recon-terminal.component';
 import { ReconResultsComponent } from './components/results/recon-results.component';
-import { ReconExportActionsComponent } from './components/export-actions/recon-export-actions.component';
 import {
-  ReconEnvelope,
   ReconModule,
   ReconModuleId,
   ReconResults,
   ReconResultsViewId,
   ReconResultsViewOption
 } from './models/recon.models';
-import { ReconLiveService } from './services/recon-live.service';
-import { TranslationService } from '../../services/translation.service';
-
-interface ReconHistoryFinding {
-  finding_type: string;
-  poc_payload?: string | null;
-}
-
-interface ReconHistoryScanDetail {
-  id: number;
-  domain_target: string;
-  status: string;
-  scan_type: string;
-  findings?: ReconHistoryFinding[];
-}
 
 interface ReconExportRow {
   section: string;
@@ -44,17 +33,26 @@ interface ReconExportRow {
 @Component({
   selector: 'app-recon',
   standalone: true,
-  imports: [CommonModule, ReconControlsComponent, ReconTerminalComponent, ReconResultsComponent, ReconExportActionsComponent, TranslatePipe],
+  imports: [
+    CommonModule,
+    ReconControlsComponent,
+    ReconResultsComponent,
+    TerminalComponent,
+    ExportActionsComponent,
+    TranslatePipe
+  ],
   templateUrl: './recon.component.html',
   styleUrl: './recon.component.scss'
 })
 export class ReconComponent implements OnInit, OnDestroy {
-  targetDomain: string = '';
-  isScanning: boolean = false;
+  targetDomain = '';
+  isScanning = false;
   terminalLines: string[] = [];
   reconResults: ReconResults | null = null;
   selectedModules: ReconModuleId[] = ['all'];
   activeResultsView: ReconResultsViewId = 'all';
+
+  private liveSub: Subscription | null = null;
   private destroyed = false;
 
   resultsViewOptions: ReconResultsViewOption[] = [
@@ -103,9 +101,9 @@ export class ReconComponent implements OnInit, OnDestroy {
   ];
 
   constructor(
-    private reconLiveService: ReconLiveService,
+    private api: ApiService,
+    private live: LiveService,
     private cdr: ChangeDetectorRef,
-    private http: HttpClient,
     private route: ActivatedRoute,
     public translationService: TranslationService
   ) {}
@@ -121,7 +119,7 @@ export class ReconComponent implements OnInit, OnDestroy {
 
   ngOnDestroy() {
     this.destroyed = true;
-    this.reconLiveService.disconnect();
+    this.liveSub?.unsubscribe();
   }
 
   updateTargetDomain(value: string): void {
@@ -172,27 +170,48 @@ export class ReconComponent implements OnInit, OnDestroy {
     this.reconResults = null;
     this.activeResultsView = 'all';
 
-    this.reconLiveService.connect(this.targetDomain, this.selectedModules, {
-      onLog: (line) => this.addTerminalLine(line),
-      onComplete: (message: ReconEnvelope) => {
-        this.reconResults = message.results || null;
-        this.addTerminalLine('[done] reconnaissance complete');
-        this.isScanning = false;
-        this.safeDetectChanges();
-      },
-      onError: (message) => {
-        this.addTerminalLine(`[error] ${message}`);
-        this.isScanning = false;
-        this.safeDetectChanges();
-      },
-      onUnexpectedClose: () => {
-        if (this.isScanning) {
-          this.addTerminalLine('[error] websocket closed unexpectedly');
-          this.isScanning = false;
-          this.safeDetectChanges();
-        }
-      }
+    const urls = this.api.reconLiveUrls({
+      target: this.targetDomain,
+      modules: this.selectedModules,
+      timeout: 300
     });
+
+    this.liveSub = this.live
+      .openWithFallback(urls, {
+        inactivityMs: 45000,
+        onOpen: ({ index }) =>
+          this.addTerminalLine(
+            index === 0
+              ? '[ws] connected to recon backend'
+              : '[ws] connected to recon backend via proxy'
+          )
+      })
+      .subscribe({
+        next: (event) => {
+          const results = reconResultsFromEvent(event);
+          if (results) {
+            this.reconResults = results;
+            this.isScanning = false;
+            this.addTerminalLine('[done] reconnaissance complete');
+            return;
+          }
+
+          const line = terminalLineFromEvent(event);
+          if (line !== null) {
+            this.addTerminalLine(line);
+          }
+        },
+        error: (error: Error) => {
+          this.addTerminalLine(`[error] ${error.message}`);
+          this.isScanning = false;
+        },
+        complete: () => {
+          if (this.isScanning) {
+            this.addTerminalLine('[error] websocket closed unexpectedly');
+            this.isScanning = false;
+          }
+        }
+      });
   }
 
   exportReconAsJson(): void {
@@ -257,12 +276,12 @@ export class ReconComponent implements OnInit, OnDestroy {
   }
 
   private loadReconFromHistory(scanId: number): void {
-    this.reconLiveService.disconnect();
+    this.liveSub?.unsubscribe();
     this.isScanning = false;
     this.activeResultsView = 'all';
 
-    this.http.get<ReconHistoryScanDetail>(`http://${window.location.hostname}:8000/api/scans/${scanId}`).subscribe({
-      next: (detail) => {
+    this.api.getScan(scanId).subscribe({
+      next: (detail: ScanDetail) => {
         this.targetDomain = detail.domain_target || this.targetDomain;
 
         const reconFinding = (detail.findings || []).find(
@@ -312,21 +331,11 @@ export class ReconComponent implements OnInit, OnDestroy {
   private resolveModulesFromResults(results: ReconResults): ReconModuleId[] {
     const modules: ReconModuleId[] = [];
 
-    if (results.dns) {
-      modules.push('dns');
-    }
-    if (results.subdomains) {
-      modules.push('subdomains');
-    }
-    if (results.apis) {
-      modules.push('apis');
-    }
-    if (results.headers) {
-      modules.push('headers');
-    }
-    if (results.technology) {
-      modules.push('tech');
-    }
+    if (results.dns) modules.push('dns');
+    if (results.subdomains) modules.push('subdomains');
+    if (results.apis) modules.push('apis');
+    if (results.headers) modules.push('headers');
+    if (results.technology) modules.push('tech');
 
     return modules.length > 0 ? modules : ['all'];
   }
@@ -372,9 +381,10 @@ export class ReconComponent implements OnInit, OnDestroy {
     const subdomains = results.subdomains;
     if (subdomains) {
       const activeMap = subdomains.active || {};
-      const discovered = subdomains.discovered_hosts && subdomains.discovered_hosts.length > 0
-        ? subdomains.discovered_hosts
-        : Object.keys(activeMap);
+      const discovered =
+        subdomains.discovered_hosts && subdomains.discovered_hosts.length > 0
+          ? subdomains.discovered_hosts
+          : Object.keys(activeMap);
 
       discovered.forEach((host) => {
         const ips = activeMap[host] || [];
@@ -461,12 +471,14 @@ export class ReconComponent implements OnInit, OnDestroy {
   }
 
   private sanitizeFileToken(value: string): string {
-    return value
-      .trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9.-]+/g, '-')
-      .replace(/-+/g, '-')
-      .replace(/^-|-$/g, '') || 'unknown';
+    return (
+      value
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9.-]+/g, '-')
+        .replace(/-+/g, '-')
+        .replace(/^-|-$/g, '') || 'unknown'
+    );
   }
 
   private escapeCsv(value: unknown): string {
@@ -487,21 +499,12 @@ export class ReconComponent implements OnInit, OnDestroy {
 
   private safeDetectChanges(): void {
     if (!this.destroyed) {
-      this.cdr.detectChanges();
+      this.cdr.markForCheck();
     }
   }
 
   private addTerminalLine(line: string) {
     this.terminalLines.push(line);
     this.safeDetectChanges();
-
-    setTimeout(() => {
-      const terminal = document.querySelector('.terminal');
-      if (terminal) {
-        terminal.scrollTop = terminal.scrollHeight;
-      }
-    }, 0);
   }
-
 }
-

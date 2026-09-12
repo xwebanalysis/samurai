@@ -2,7 +2,7 @@ import { CommonModule } from '@angular/common';
 import { Component, EventEmitter, Input, Output } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { ReconModule, ReconModuleId } from '../../models/recon.models';
-import { TranslatePipe } from '../../../../pipes/translate.pipe';
+import { TranslatePipe } from '../../../../core/translate.pipe';
 
 @Component({
   selector: 'app-recon-controls',

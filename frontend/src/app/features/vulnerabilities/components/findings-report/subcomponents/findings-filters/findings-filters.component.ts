@@ -1,7 +1,7 @@
 import { Component, Input, Output, EventEmitter } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { TranslatePipe } from '../../../../../../pipes/translate.pipe';
+import { TranslatePipe } from '../../../../../../core/translate.pipe';
 import { SeverityLevel } from '../../../../models/vulnerabilities.models';
 
 @Component({

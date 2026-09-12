@@ -1,0 +1,23 @@
+<section class="terminal-panel" aria-live="polite" aria-atomic="false">
+  <div class="terminal-head">
+    <h2 class="t-label">{{ title | t }}</h2>
+    <span
+      *ngIf="showStatus"
+      class="terminal-status t-label"
+      [class.active]="isScanning"
+      aria-live="polite"
+    >{{ isScanning ? ('LIVE' | t) : ('IDLE' | t) }}</span>
+  </div>
+
+  <div
+    class="nothing-term"
+    #scrollMe
+    [scrollTop]="scrollMe.scrollHeight"
+    [style.height.px]="height"
+    role="log"
+    [attr.aria-label]="ariaLabel | t"
+  >
+    <pre *ngFor="let line of logs">{{ line }}</pre>
+    <div class="cursor" *ngIf="isScanning" aria-hidden="true"></div>
+  </div>
+</section>

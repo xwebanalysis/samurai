@@ -81,10 +81,7 @@ if [ -d "$ROOT_DIR/frontend/node_modules" ]; then
     echo "    Removing node_modules/..."
     rm -rf "$ROOT_DIR/frontend/node_modules"
 fi
-if [ -f "$ROOT_DIR/frontend/package-lock.json" ]; then
-    echo "    Removing package-lock.json..."
-    rm -f "$ROOT_DIR/frontend/package-lock.json"
-fi
+# NOTE: package-lock.json is intentionally preserved (reproducible npm installs).
 if [ -d "$ROOT_DIR/frontend/dist" ]; then
     echo "    Removing dist/..."
     rm -rf "$ROOT_DIR/frontend/dist"
@@ -94,7 +91,22 @@ if [ -d "$ROOT_DIR/frontend/.angular" ]; then
     rm -rf "$ROOT_DIR/frontend/.angular"
 fi
 
-# ── 5. macOS / general junk ──────────────────────────────────────────
+# ── 5. SQLite databases (local default DB_DRIVER) ────────────────────
+DB_COUNT=0
+for pattern in "samurai.db" "samurai.db-wal" "samurai.db-shm" "samurai.db-journal"; do
+    for candidate in "$ROOT_DIR/$pattern" "$ROOT_DIR/backend/$pattern"; do
+        if [ -f "$candidate" ]; then
+            echo "    Removing $(basename "$candidate")..."
+            rm -f "$candidate"
+            DB_COUNT=$((DB_COUNT + 1))
+        fi
+    done
+done
+if [ "$DB_COUNT" -eq 0 ]; then
+    echo "    No SQLite database files found."
+fi
+
+# ── 6. macOS / general junk ──────────────────────────────────────────
 if [[ "$OSTYPE" == "darwin"* ]]; then
     echo -e "${CYAN}[+] Cleaning macOS artifacts...${NC}"
     find "$ROOT_DIR" -name ".DS_Store" -delete 2>/dev/null || true
@@ -102,4 +114,4 @@ fi
 
 echo ""
 echo -e "${GREEN}[+] Cleanup complete.${NC}"
-echo -e "    Run ${CYAN}./samurai.sh${NC} or ${CYAN}./samurai.sh --native${NC} for a fresh start."
+echo -e "    Run ${CYAN}./samurai.sh${NC} (local SQLite) or ${CYAN}./samurai.sh docker${NC} for a fresh start."

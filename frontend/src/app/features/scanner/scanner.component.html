@@ -42,20 +42,25 @@
         [openPortsDetailed]="openPortsDetailed"
       ></app-scanner-metrics>
 
-      <app-scanner-terminal
-        [terminalLogs]="terminalLogs"
+      <app-terminal
+        [logs]="terminalLogs"
         [isScanning]="isScanning"
-      ></app-scanner-terminal>
+        title="LIVE_TERMINAL_OUTPUT"
+        ariaLabel="Scanner terminal output"
+        [height]="400"
+      ></app-terminal>
     </div>
 
-    <app-scanner-export-actions
+    <app-export-actions
       class="full-width"
-      [hasExports]="!!currentScanDetail"
+      [visible]="!!currentScanDetail"
+      ariaContext="scanner report"
+      align="end"
       (exportCsv)="exportScannerAsCsv()"
       (exportJson)="exportScannerAsJson()"
       (exportPdf)="exportScannerAsPdf()"
       (exportBinary)="exportScannerAsBinary()"
-    ></app-scanner-export-actions>
+    ></app-export-actions>
 
     <app-scanner-report
       class="full-width"

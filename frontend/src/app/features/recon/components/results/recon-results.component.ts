@@ -1,6 +1,6 @@
 import { CommonModule } from '@angular/common';
 import { Component, Input } from '@angular/core';
-import { TranslatePipe } from '../../../../pipes/translate.pipe';
+import { TranslatePipe } from '../../../../core/translate.pipe';
 import { ReconResults, ReconResultsViewId } from '../../models/recon.models';
 import { ReconApiResultsComponent } from './components/recon-api-results.component';
 import { ReconDnsResultsComponent } from './components/recon-dns-results.component';

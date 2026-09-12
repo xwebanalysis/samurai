@@ -1,8 +1,10 @@
 import { Component, ChangeDetectorRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { HttpClient } from '@angular/common/http';
-import { TranslatePipe } from '../../pipes/translate.pipe';
+import { firstValueFrom } from 'rxjs';
+
+import { ApiService, DatabaseExportRawResponse } from '../../core/api.service';
+import { TranslatePipe } from '../../core/translate.pipe';
 
 interface ExportSummary {
   scan_count: number;
@@ -26,9 +28,10 @@ export class ExportDatabaseComponent {
   summary: ExportSummary | null = null;
   lastExportFilename = '';
 
-  private baseUrl = `http://${window.location.hostname}:8000`;
-
-  constructor(private http: HttpClient, private cdr: ChangeDetectorRef) {}
+  constructor(
+    private api: ApiService,
+    private cdr: ChangeDetectorRef
+  ) {}
 
   selectMode(mode: 'direct' | 'encrypted'): void {
     this.exportMode = mode;
@@ -43,17 +46,10 @@ export class ExportDatabaseComponent {
     this.errorMessage = '';
 
     try {
-      const resp = await this.http
-        .get(`${this.baseUrl}/api/database/export/raw`, {
-          responseType: 'blob',
-          observe: 'response',
-        })
-        .toPromise();
+      const resp = await firstValueFrom(this.api.exportDatabaseRaw());
 
       if (!resp || !resp.body) {
         this.errorMessage = '[ERROR] Empty response from server';
-        this.isExporting = false;
-        this.cdr.detectChanges();
         return;
       }
 
@@ -62,18 +58,18 @@ export class ExportDatabaseComponent {
       this.downloadBlob(resp.body, filename);
       this.lastExportFilename = filename;
       this.exportDone = true;
-    } catch (err: any) {
-      this.errorMessage = `[ERROR] ${err?.message || 'Export failed'}`;
+    } catch (err: unknown) {
+      this.errorMessage = `[ERROR] ${(err as Error)?.message || 'Export failed'}`;
     } finally {
       this.isExporting = false;
-      this.cdr.detectChanges();
+      this.cdr.markForCheck();
     }
   }
 
   async exportEncrypted(): Promise<void> {
     if (!this.encryptPassword || this.encryptPassword.length < 4) {
       this.errorMessage = '[ERROR] Password must be at least 4 characters';
-      this.cdr.detectChanges();
+      this.cdr.markForCheck();
       return;
     }
 
@@ -82,30 +78,17 @@ export class ExportDatabaseComponent {
     this.errorMessage = '';
 
     try {
-      const resp = await this.http
-        .post(
-          `${this.baseUrl}/api/database/export/encrypted`,
-          { password: this.encryptPassword },
-          {
-            responseType: 'blob',
-            observe: 'response',
-          }
-        )
-        .toPromise();
+      const resp = await firstValueFrom(this.api.exportDatabaseEncrypted(this.encryptPassword));
 
       if (!resp || !resp.body) {
         this.errorMessage = '[ERROR] Empty response from server';
-        this.isExporting = false;
-        this.cdr.detectChanges();
         return;
       }
 
       if (resp.body.type === 'application/json') {
         const text = await resp.body.text();
-        const errData = JSON.parse(text);
+        const errData = JSON.parse(text) as { detail?: string };
         this.errorMessage = `[ERROR] ${errData.detail || 'Export failed'}`;
-        this.isExporting = false;
-        this.cdr.detectChanges();
         return;
       }
 
@@ -113,18 +96,18 @@ export class ExportDatabaseComponent {
       this.downloadBlob(resp.body, filename);
       this.lastExportFilename = filename;
       this.exportDone = true;
-    } catch (err: any) {
-      this.errorMessage = `[ERROR] ${err?.message || 'Encrypted export failed'}`;
+    } catch (err: unknown) {
+      this.errorMessage = `[ERROR] ${(err as Error)?.message || 'Encrypted export failed'}`;
     } finally {
       this.isExporting = false;
-      this.cdr.detectChanges();
+      this.cdr.markForCheck();
     }
   }
 
   private async processJsonResponse(blob: Blob): Promise<void> {
     try {
       const text = await blob.text();
-      const data = JSON.parse(text);
+      const data = JSON.parse(text) as DatabaseExportRawResponse;
       this.summary = {
         scan_count: data.export_metadata?.scan_count ?? 0,
         finding_count: data.export_metadata?.finding_count ?? 0,

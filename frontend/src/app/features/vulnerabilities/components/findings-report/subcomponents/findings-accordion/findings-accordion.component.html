@@ -18,7 +18,7 @@
       <span class="t-label text-secondary">{{ 'Content-Type' | t }}: {{ link.content_type }}</span>
       <div *ngIf="!link.findings.length" class="t-body empty-node">{{ 'No vulnerabilities detected on this specific node.' | t }}</div>
 
-      <app-finding-item *ngFor="let vf of link.findings" [finding]="vf"></app-finding-item>
+      <app-findings-list [findings]="link.findings"></app-findings-list>
     </div>
   </details>
 </div>

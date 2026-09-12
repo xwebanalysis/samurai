@@ -1,6 +1,6 @@
 import { CommonModule } from '@angular/common';
 import { Component, Input } from '@angular/core';
-import { TranslatePipe } from '../../../../../pipes/translate.pipe';
+import { TranslatePipe } from '../../../../../core/translate.pipe';
 
 @Component({
   selector: 'app-recon-api-results',

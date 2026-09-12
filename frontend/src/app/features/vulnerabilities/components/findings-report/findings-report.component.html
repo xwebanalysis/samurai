@@ -14,13 +14,15 @@
   </app-findings-filters>
 
   <!-- Botones de exportación -->
-  <app-findings-export-actions
-    [findingsCount]="filteredFindingsCount"
+  <app-export-actions
+    [visible]="filteredFindingsCount > 0"
+    ariaContext="findings"
+    align="end"
     (exportCsv)="exportFindingsAsCsv()"
     (exportJson)="exportFindingsAsJson()"
     (exportPdf)="exportFindingsAsPdf()"
     (exportBinary)="exportFindingsAsBinary()">
-  </app-findings-export-actions>
+  </app-export-actions>
 
   <!-- Estado: Sin links encontrados -->
   <app-findings-empty-state *ngIf="findingsNodes.length === 0"></app-findings-empty-state>

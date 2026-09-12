@@ -4,38 +4,53 @@
 
 <p>Este documento detalla los pasos necesarios para ejecutar la aplicación en un entorno de desarrollo local y proporciona la configuración arquitectónica requerida para un despliegue en producción.</p>
 
+<p>Con el rediseño local-first, <strong>SQLite es la base de datos por defecto</strong>, Docker es opcional y Redis/Celery ya no forman parte del stack.</p>
+
 <hr>
 
 <h2>1. Ejecución en Desarrollo Local</h2>
 
-<p>El entorno local está configurado con Reemplazo de Módulos en Caliente (HMR) tanto para el frontend Angular como para el backend FastAPI. Los cambios realizados en los archivos fuente se reflejarán inmediatamente sin necesidad de reconstruir los contenedores.</p>
+<p>El entorno local está configurado con Reemplazo de Módulos en Caliente (HMR) tanto para el frontend Angular como para el backend FastAPI. Los cambios realizados en los archivos fuente se reflejarán inmediatamente sin necesidad de reconstruir contenedores.</p>
 
 <h3>1.1 Prerrequisitos</h3>
 <ul>
-    <li>Docker Engine instalado y ejecutándose.</li>
-    <li>Docker Compose instalado.</li>
+    <li>Python 3.13 (<code>uv</code> recomendado; también vale <code>python3 -m venv</code>).</li>
+    <li>Node 24 (Angular 21).</li>
+    <li>Opcional: <code>nmap</code>, <code>sqlmap</code>, <code>nuclei</code>. Si faltan, el módulo reporta <code>DEPENDENCY_MISSING</code> y el escaneo continúa.</li>
+    <li>Docker solo para <code>./samurai.sh docker</code> (PostgreSQL).</li>
 </ul>
 
-<h3>1.2 Instrucciones de Inicio</h3>
+<h3>1.2 Instrucciones de Inicio (recomendado)</h3>
 <ol>
     <li>Abre una terminal y navega al directorio raíz del proyecto: <code>/samurai</code></li>
-    <li>Ejecuta el siguiente comando para construir e iniciar todos los contenedores orquestados en modo desacoplado:</li>
+    <li>Ejecuta el lanzador en modo local (por defecto):</li>
 </ol>
 
-<pre><code>docker compose up -d --build</code></pre>
+<pre><code>./samurai.sh          # o: ./samurai.sh local</code></pre>
 
-<h3>1.3 Ejecución Local (Sin Docker) / Configuración de IDE</h3>
-<p>Si deseas ejecutar la aplicación Angular manualmente o simplemente quieres que tu IDE (como VSCode) deje de resaltar errores de TypeScript, debes instalar las dependencias Node localmente en tu máquina anfitriona:</p>
+<p>El script crea <code>backend/.venv</code> (Python 3.13 con uv), instala el binding local de <code>xwa-sdk</code> si existe, instala <code>requirements.txt</code>, arranca uvicorn en <code>:8000</code> y <code>ng serve</code> en <code>:4200</code>, y espera a <code>/api/health</code>.</p>
+
+<h3>1.3 Ejecución Manual (Sin el script)</h3>
 <ol>
-    <li>Navega a la carpeta frontend: <code>cd frontend/</code></li>
-    <li>Instala los paquetes: <code>npm install</code></li>
-    <li>Para iniciar el servidor web manualmente sin Docker: <code>npm run start</code> (El frontend arrancará en <code>localhost:4200</code>)</li>
+    <li>Backend:
+<pre><code>cd backend
+~/.local/bin/uv venv --python 3.13 --seed .venv
+.venv/bin/pip install -r requirements.txt
+DB_DRIVER=sqlite DB_PATH=../samurai.db .venv/bin/uvicorn app.main:app --port 8000</code></pre>
+    </li>
+    <li>Frontend:
+<pre><code>cd frontend
+npm ci        # o: npm install
+npm run start</code></pre>
+    </li>
 </ol>
 
 <h3>1.4 Acceso a los Servicios</h3>
 <ul>
-    <li><strong>Frontend (Interfaz Angular):</strong> Accesible en <code>http://localhost:4200</code></li>
-    <li><strong>Backend API (FastAPI):</strong> Accesible en <code>http://localhost:8000/docs</code> (Swagger UI)</li>
+    <li><strong>Frontend (Interfaz Angular):</strong> <code>http://localhost:4200</code></li>
+    <li><strong>Backend API (FastAPI):</strong> <code>http://localhost:8000/docs</code> (Swagger UI)</li>
+    <li><strong>Health:</strong> <code>http://localhost:8000/api/health</code></li>
+    <li><strong>Base de datos SQLite:</strong> <code>&lt;repo&gt;/samurai.db</code> (configurable con <code>DB_PATH</code>)</li>
 </ul>
 
 <hr>
@@ -66,7 +81,7 @@
 <h3>2.3 Gestión de Base de Datos y Secretos</h3>
 <p>La seguridad es primordial para las capas persistentes.</p>
 <ul>
-    <li>No expongas los puertos de Redis y PostgreSQL a la red pública. Elimina el enlace <code>ports:</code> de ambos servicios en <code>docker-compose.yml</code> para que permanezcan aislados dentro de la red interna de Docker.</li>
+    <li>No expongas los puertos de PostgreSQL a la red pública. Elimina el enlace <code>ports:</code> del servicio <code>db</code> en <code>docker-compose.yml</code> para que permanezca aislado dentro de la red interna de Docker.</li>
     <li>Migra las credenciales codificadas (como <code>DB_USER</code> y <code>DB_PASS</code>) a Docker Secrets o un gestor de secretos externo (por ejemplo, AWS Secrets Manager, HashiCorp Vault). Usa un archivo <code>.env</code> inyectado como solución intermedia.</li>
     <li>Asegúrate de que el volumen de la base de datos PostgreSQL tenga copias de seguridad regulares mediante tareas automatizadas de cron adjuntas a la capa de persistencia.</li>
 </ul>

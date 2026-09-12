@@ -64,7 +64,7 @@
 </ul>
 
 <h4>D. <code>features/automation/</code></h4>
-<p>Planificador de tareas en segundo plano y gestor de horarios (Workers / Celery Beat).</p>
+<p>Planificador de tareas en segundo plano y gestor de horarios. Fuera del alcance de esta fase: Redis/Celery se retiraron con el enfoque local-first y la programación de escaneos recurrentes queda como trabajo futuro.</p>
 <ul>
     <li><code>components/cron-builder/</code></li>
     <li><code>pages/scheduler/</code></li>

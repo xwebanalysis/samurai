@@ -1,21 +1,17 @@
 import { Component, OnDestroy, ChangeDetectorRef, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { HttpClient } from '@angular/common/http';
-import { TranslatePipe } from '../../pipes/translate.pipe';
-import { forkJoin } from 'rxjs';
 import { ActivatedRoute } from '@angular/router';
-import {
-  VulnerabilitiesAnalysisSummaryComponent
-} from './components/analysis-summary/analysis-summary.component';
+import { forkJoin, Subscription } from 'rxjs';
+
+import { ApiService, SamuraiEvent, ScanDetail, ScanListItem } from '../../core/api.service';
+import { LiveService } from '../../core/live.service';
+import { terminalLineFromEvent } from '../../core/live-events';
+import { TranslatePipe } from '../../core/translate.pipe';
+import { TerminalComponent } from '../../shared/terminal/terminal.component';
+import { VulnerabilitiesAnalysisSummaryComponent } from './components/analysis-summary/analysis-summary.component';
 import { VulnerabilitiesFindingsReportComponent } from './components/findings-report/findings-report.component';
 import { VulnerabilitiesTargetConfigComponent } from './components/target-config/target-config.component';
-import { VulnerabilitiesTerminalOutputComponent } from './components/terminal-output/terminal-output.component';
-import {
-  AnalysisSummary,
-  ScanDetail,
-  ScanListItem,
-  TrendSnapshot
-} from './models/vulnerabilities.models';
+import { AnalysisSummary, TrendSnapshot } from './models/vulnerabilities.models';
 
 @Component({
   selector: 'app-vulnerabilities',
@@ -24,9 +20,9 @@ import {
     CommonModule,
     TranslatePipe,
     VulnerabilitiesTargetConfigComponent,
-    VulnerabilitiesTerminalOutputComponent,
     VulnerabilitiesAnalysisSummaryComponent,
-    VulnerabilitiesFindingsReportComponent
+    VulnerabilitiesFindingsReportComponent,
+    TerminalComponent
   ],
   templateUrl: './vulnerabilities.component.html',
   styleUrls: ['./vulnerabilities.component.scss']
@@ -34,7 +30,6 @@ import {
 export class VulnerabilitiesComponent implements OnInit, OnDestroy {
   targetUrl = 'http://scanme.nmap.org';
   isScanning = false;
-  socket: WebSocket | null = null;
   terminalLogs: string[] = ['[ SYSTEM READY ] Waiting for target config...'];
 
   authScanConfig = {
@@ -46,7 +41,8 @@ export class VulnerabilitiesComponent implements OnInit, OnDestroy {
   };
 
   private readonly authScanStorageKey = 'samurai-auth-scan-config';
-  
+  private liveSub: Subscription | null = null;
+
   activeModules: Record<string, boolean> = {
     tls: true,
     headers: true,
@@ -78,12 +74,16 @@ export class VulnerabilitiesComponent implements OnInit, OnDestroy {
     { key: 'auth_scan', label: 'AUTH SCAN', description: 'Authorization boundary probing on sensitive routes' },
     { key: 'js_secret', label: 'JS SECRET', description: 'Client-side JavaScript secret and token leakage analysis' }
   ];
-  
-  // Para mostrar los resultados como acordeón después
+
   completedScanDetails: ScanDetail | null = null;
   trendSnapshots: TrendSnapshot[] = [];
 
-  constructor(private http: HttpClient, private cdr: ChangeDetectorRef, private route: ActivatedRoute) {}
+  constructor(
+    private api: ApiService,
+    private live: LiveService,
+    private cdr: ChangeDetectorRef,
+    private route: ActivatedRoute
+  ) {}
 
   ngOnInit() {
     this.loadAuthScanConfigFromStorage();
@@ -100,6 +100,7 @@ export class VulnerabilitiesComponent implements OnInit, OnDestroy {
           ...this.authScanConfig,
           authMode: authModeParam
         };
+        this.cdr.markForCheck();
       }
     });
   }
@@ -109,59 +110,60 @@ export class VulnerabilitiesComponent implements OnInit, OnDestroy {
     if (!this.targetUrl) return;
 
     this.isScanning = true;
-    this.completedScanDetails = null; // Reset
+    this.completedScanDetails = null;
     this.terminalLogs = [`[+] CONNECTING TO DAST ENGINE...`, `[*] Target: ${this.targetUrl}`];
-    this.cdr.detectChanges();
+    this.cdr.markForCheck();
 
     const activeKeys = this.allModulesActive
       ? 'all'
-      : (Object.entries(this.activeModules).filter(([, v]) => v).map(([k]) => k).join(',') || 'all');
+      : Object.entries(this.activeModules)
+          .filter(([, v]) => v)
+          .map(([k]) => k)
+          .join(',') || 'all';
 
-    const wsParams = new URLSearchParams({
+    const wsUrl = this.api.vulnLiveUrl({
       target: this.targetUrl,
-      modules: activeKeys
+      modules: activeKeys,
+      authMode: this.authScanConfig.authMode,
+      bearerToken: this.authScanConfig.bearerToken,
+      basicUser: this.authScanConfig.basicUser,
+      basicPass: this.authScanConfig.basicPass,
+      cookieHeader: this.authScanConfig.cookieHeader
     });
 
-    if (this.authScanConfig.bearerToken.trim()) {
-      wsParams.set('auth_bearer', this.authScanConfig.bearerToken.trim());
-    }
-    if (this.authScanConfig.basicUser.trim()) {
-      wsParams.set('auth_user', this.authScanConfig.basicUser.trim());
-    }
-    if (this.authScanConfig.basicPass.trim()) {
-      wsParams.set('auth_pass', this.authScanConfig.basicPass);
-    }
-    if (this.authScanConfig.cookieHeader.trim()) {
-      wsParams.set('auth_cookie', this.authScanConfig.cookieHeader.trim());
-    }
-    wsParams.set('auth_mode', this.authScanConfig.authMode);
-
-    const wsUrl = `ws://${window.location.hostname}:8000/api/vuln/live?${wsParams.toString()}`;
-    this.socket = new WebSocket(wsUrl);
-
-    this.socket.onmessage = (event) => {
-      console.log("WS MESSAGE:", event.data);
-      this.terminalLogs.push(event.data);
-      this.cdr.detectChanges(); // Force UI update
-    };
-
-    this.socket.onclose = () => {
-      console.log("WS CLOSED");
-      this.terminalLogs.push('[!] CRAWLER FINISHED. Fetching database structure...');
-      this.isScanning = false;
-      this.cdr.detectChanges(); // Force UI update
-      this.fetchLatestScan();
-    };
-
-    this.socket.onerror = (err) => {
-      console.log("WS ERROR:", err);
-      this.terminalLogs.push('[!] WEBSOCKET CONNECTION ERROR.');
-      this.isScanning = false;
-      this.cdr.detectChanges(); // Force update
-    };
+    this.liveSub = this.live.open(wsUrl).subscribe({
+      next: (event) => {
+        this.handleVulnerabilityEvent(event);
+        this.cdr.markForCheck();
+      },
+      error: () => {
+        this.terminalLogs.push('[!] WEBSOCKET CONNECTION ERROR.');
+        this.isScanning = false;
+        this.cdr.markForCheck();
+      },
+      complete: () => {
+        this.terminalLogs.push('[!] CRAWLER FINISHED. Fetching database structure...');
+        this.isScanning = false;
+        this.cdr.markForCheck();
+        this.fetchLatestScan();
+      }
+    });
   }
 
-  onAuthScanConfigChange(nextConfig: { authMode: string; bearerToken: string; basicUser: string; basicPass: string; cookieHeader: string }) {
+  private handleVulnerabilityEvent(event: SamuraiEvent) {
+    const line = terminalLineFromEvent(event);
+    if (line !== null) {
+      this.terminalLogs.push(line);
+    }
+  }
+
+  onAuthScanConfigChange(nextConfig: {
+    authMode: string;
+    bearerToken: string;
+    basicUser: string;
+    basicPass: string;
+    cookieHeader: string;
+  }) {
     const normalizedMode = nextConfig.authMode === 'basic_first' ? 'basic_first' : 'bearer_first';
 
     this.authScanConfig = {
@@ -174,7 +176,7 @@ export class VulnerabilitiesComponent implements OnInit, OnDestroy {
 
   private persistAuthScanConfig() {
     try {
-      localStorage.setItem(this.authScanStorageKey, JSON.stringify(this.authScanConfig));
+      window.localStorage.setItem(this.authScanStorageKey, JSON.stringify(this.authScanConfig));
     } catch {
       // Storage may be unavailable in restrictive browser contexts.
     }
@@ -182,10 +184,16 @@ export class VulnerabilitiesComponent implements OnInit, OnDestroy {
 
   private loadAuthScanConfigFromStorage() {
     try {
-      const raw = localStorage.getItem(this.authScanStorageKey);
+      const raw = window.localStorage.getItem(this.authScanStorageKey);
       if (!raw) return;
 
-      const parsed = JSON.parse(raw) as Partial<{ authMode: string; bearerToken: string; basicUser: string; basicPass: string; cookieHeader: string }>;
+      const parsed = JSON.parse(raw) as Partial<{
+        authMode: string;
+        bearerToken: string;
+        basicUser: string;
+        basicPass: string;
+        cookieHeader: string;
+      }>;
       this.authScanConfig = {
         authMode: parsed.authMode === 'basic_first' ? 'basic_first' : 'bearer_first',
         bearerToken: parsed.bearerToken || '',
@@ -205,36 +213,51 @@ export class VulnerabilitiesComponent implements OnInit, OnDestroy {
   }
 
   fetchLatestScan() {
-    // Buscamos el último escaneo en el sistema para renderizar el árbol inmediatamente
-    this.http.get<ScanListItem[]>(`http://${window.location.hostname}:8000/api/scans`).subscribe({
+    this.api.listScans().subscribe({
       next: (scans) => {
         if (scans && scans.length > 0) {
-            this.fetchTrendFromRecentScans(scans);
-            // Fetch detallado del último
-              this.http.get<ScanDetail>(`http://${window.location.hostname}:8000/api/scans/${scans[0].id}`).subscribe({
-                next: (detail) => {
-                    this.completedScanDetails = detail;
-                    this.cdr.detectChanges();
-                }
-            });
+          this.fetchTrendFromRecentScans(scans);
+          this.api.getScan(scans[0].id).subscribe({
+            next: (detail) => {
+              this.completedScanDetails = detail;
+              this.cdr.markForCheck();
+            },
+            error: () => {
+              this.terminalLogs.push('[!] Unable to load the latest scan report.');
+              this.cdr.markForCheck();
+            }
+          });
         }
+      },
+      error: () => {
+        this.terminalLogs.push('[!] Unable to load scan history.');
+        this.cdr.markForCheck();
       }
     });
   }
 
   private loadScanById(scanId: number) {
-    this.http.get<ScanListItem[]>(`http://${window.location.hostname}:8000/api/scans`).subscribe({
+    this.api.listScans().subscribe({
       next: (scans) => {
         this.fetchTrendFromRecentScans(scans || []);
+      },
+      error: () => {
+        this.trendSnapshots = [];
+        this.cdr.markForCheck();
       }
     });
 
-    this.http.get<ScanDetail>(`http://${window.location.hostname}:8000/api/scans/${scanId}`).subscribe({
+    this.api.getScan(scanId).subscribe({
       next: (detail) => {
         this.completedScanDetails = detail;
         this.targetUrl = detail.domain_target || this.targetUrl;
         this.isScanning = false;
-        this.cdr.detectChanges();
+        this.cdr.markForCheck();
+      },
+      error: () => {
+        this.terminalLogs.push(`[!] Unable to load scan report #${scanId}.`);
+        this.isScanning = false;
+        this.cdr.markForCheck();
       }
     });
   }
@@ -266,38 +289,37 @@ export class VulnerabilitiesComponent implements OnInit, OnDestroy {
 
     const width = 320;
     const height = 64;
-    const maxY = Math.max(...this.trendSnapshots.map(s => s.riskScore), 1);
+    const maxY = Math.max(...this.trendSnapshots.map((s) => s.riskScore), 1);
 
-    return this.trendSnapshots.map((snap, idx) => {
-      const x = this.trendSnapshots.length === 1 ? width / 2 : (idx / (this.trendSnapshots.length - 1)) * width;
-      const y = height - ((snap.riskScore / maxY) * height);
-      return `${x.toFixed(1)},${y.toFixed(1)}`;
-    }).join(' ');
+    return this.trendSnapshots
+      .map((snap, idx) => {
+        const x = this.trendSnapshots.length === 1 ? width / 2 : (idx / (this.trendSnapshots.length - 1)) * width;
+        const y = height - (snap.riskScore / maxY) * height;
+        return `${x.toFixed(1)},${y.toFixed(1)}`;
+      })
+      .join(' ');
   }
 
   get trendLatestDelta() {
     if (this.trendSnapshots.length < 2) return null;
-    const current = this.trendSnapshots[0].riskScore;
-    const previous = this.trendSnapshots[1].riskScore;
-    return current - previous;
+    return this.trendSnapshots[0].riskScore - this.trendSnapshots[1].riskScore;
   }
 
   private fetchTrendFromRecentScans(scans: ScanListItem[]) {
-    const recent = scans.slice(0, 8).filter(s => s?.id);
+    const recent = scans.slice(0, 8).filter((s) => s?.id);
     if (!recent.length) {
       this.trendSnapshots = [];
+      this.cdr.markForCheck();
       return;
     }
 
-    const requests = recent.map((scan) =>
-      this.http.get<ScanDetail>(`http://${window.location.hostname}:8000/api/scans/${scan.id}`)
-    );
-
-    forkJoin(requests).subscribe({
+    forkJoin(recent.map((scan) => this.api.getScan(scan.id))).subscribe({
       next: (details) => {
         this.trendSnapshots = details.map((detail, index) => {
           const summary = this.buildSummary(detail, 0);
-          const label = recent[index]?.created_at ? String(recent[index].created_at).slice(5, 10) : `#${recent[index]?.id}`;
+          const label = recent[index]?.created_at
+            ? String(recent[index].created_at).slice(5, 10)
+            : `#${recent[index]?.id}`;
           return {
             id: recent[index].id,
             riskScore: summary?.riskScore ?? 0,
@@ -305,10 +327,11 @@ export class VulnerabilitiesComponent implements OnInit, OnDestroy {
             label
           };
         });
-        this.cdr.detectChanges();
+        this.cdr.markForCheck();
       },
       error: () => {
         this.trendSnapshots = [];
+        this.cdr.markForCheck();
       }
     });
   }
@@ -343,7 +366,7 @@ export class VulnerabilitiesComponent implements OnInit, OnDestroy {
     const cleanLinks = Math.max(totalLinks - vulnerableLinks, 0);
     const coveragePct = totalLinks > 0 ? Math.round((vulnerableLinks / totalLinks) * 100) : 0;
 
-    const weightedRisk = (critical * 4) + (high * 3) + (medium * 2) + low;
+    const weightedRisk = critical * 4 + high * 3 + medium * 2 + low;
     const riskDenominator = Math.max(totalLinks * 4, 1);
     const riskScore = Math.min(100, Math.round((weightedRisk / riskDenominator) * 100));
 
@@ -366,8 +389,6 @@ export class VulnerabilitiesComponent implements OnInit, OnDestroy {
   }
 
   ngOnDestroy() {
-    if (this.socket) {
-      this.socket.close();
-    }
+    this.liveSub?.unsubscribe();
   }
 }

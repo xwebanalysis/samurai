@@ -7,9 +7,15 @@ import shutil
 import re
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
-from fastapi import WebSocket
 from sqlalchemy.orm import Session
-from . import models
+
+from . import events, models
+
+# Hard limits for external scanner subprocesses (mirrors nmap's behaviour:
+# explicit timeout, terminate then kill, never block the event loop forever).
+SQLMAP_TIMEOUT_SECONDS = 240
+NUCLEI_TIMEOUT_SECONDS = 300
+SUBPROCESS_TERMINATE_GRACE_SECONDS = 8
 
 # Configuración de payloads de Prueba
 SENSITIVE_PATHS = [
@@ -62,6 +68,24 @@ JS_SECRET_PATTERNS = [
 ]
 
 
+async def _terminate_process(process: asyncio.subprocess.Process, grace: float = SUBPROCESS_TERMINATE_GRACE_SECONDS) -> None:
+    """Terminate a subprocess and escalate to kill if it does not exit in time."""
+    if process.returncode is not None:
+        return
+    try:
+        process.terminate()
+    except ProcessLookupError:
+        return
+    try:
+        await asyncio.wait_for(process.wait(), timeout=grace)
+    except asyncio.TimeoutError:
+        try:
+            process.kill()
+        except ProcessLookupError:
+            return
+        await process.wait()
+
+
 def _parse_nuclei_severity(line: str) -> str:
     match = re.search(r"\[(critical|high|medium|low|info)\]", line, re.IGNORECASE)
     if not match:
@@ -108,13 +132,13 @@ def _build_auth_headers(auth_context: dict | None):
 
     return headers
 
-async def audit_ssl(target_url: str, scan_record: models.Scan, websocket: WebSocket, db: Session):
+async def audit_ssl(target_url: str, scan_record: models.Scan, emitter: events.EventEmitter, db: Session):
     parsed = urlparse(target_url)
     domain = parsed.netloc
     if ":" in domain:
         domain = domain.split(":")[0]
         
-    await websocket.send_text(f"[*] Auditing TLS/SSL Configuration for {domain}...")
+    await emitter.log(f"[*] Auditing TLS/SSL Configuration for {domain}...")
     try:
         def get_ssl_info():
             context = ssl.create_default_context()
@@ -123,8 +147,8 @@ async def audit_ssl(target_url: str, scan_record: models.Scan, websocket: WebSoc
                     return ssock.version(), ssock.cipher()
                     
         version, cipher = await asyncio.to_thread(get_ssl_info)
-        await websocket.send_text(f"    [INFO] SSL/TLS Version: {version}")
-        await websocket.send_text(f"    [INFO] Cipher Suite: {cipher[0]}")
+        await emitter.log(f"    [INFO] SSL/TLS Version: {version}")
+        await emitter.log(f"    [INFO] Cipher Suite: {cipher[0]}")
         
         if version in ["TLSv1", "TLSv1.1", "SSLv3"]:
             finding = models.Finding(
@@ -134,11 +158,11 @@ async def audit_ssl(target_url: str, scan_record: models.Scan, websocket: WebSoc
             )
             db.add(finding)
             db.commit()
-            await websocket.send_text(f"    [!] VULNERABILITY DETECTED: Obsolete SSL/TLS ({version})")
+            await emitter.log(f"    [!] VULNERABILITY DETECTED: Obsolete SSL/TLS ({version})")
     except Exception as e:
-        await websocket.send_text(f"    [-] SSL/TLS Audit Failed or No HTTPS.")
+        await emitter.log(f"    [-] SSL/TLS Audit Failed or No HTTPS.")
 
-def audit_headers_and_fingerprint(response, current_url, link_id, scan_id, websocket, db, vulns_found, messages):
+def audit_headers_and_fingerprint(response, current_url, link_id, scan_id, emitter, db, vulns_found, messages):
     headers = response.headers
     
     server = headers.get("Server")
@@ -183,7 +207,7 @@ def audit_headers_and_fingerprint(response, current_url, link_id, scan_id, webso
             vulns_found[0] += 1
             messages.append(f"    [!] VULNERABILITY DETECTED: Insecure Cookie Flags")
 
-async def test_cors(current_url, link_id, scan_id, websocket, db, vulns_found):
+async def test_cors(current_url, link_id, scan_id, emitter, db, vulns_found):
     try:
         res = await asyncio.to_thread(requests.get, current_url, headers={"Origin": "https://evil.com"}, timeout=3)
         if res.headers.get("Access-Control-Allow-Origin") == "https://evil.com" or res.headers.get("Access-Control-Allow-Origin") == "*":
@@ -195,11 +219,11 @@ async def test_cors(current_url, link_id, scan_id, websocket, db, vulns_found):
             db.add(finding)
             db.commit()
             vulns_found[0] += 1
-            await websocket.send_text(f"    [!] HIGH: CORS Misconfiguration detected.")
+            await emitter.log(f"    [!] HIGH: CORS Misconfiguration detected.")
     except Exception:
         pass
 
-async def active_fuzz_forms(soup, current_url, link_id, scan_id, websocket, db, vulns_found, active_modules):
+async def active_fuzz_forms(soup, current_url, link_id, scan_id, emitter, db, vulns_found, active_modules):
     forms = soup.find_all("form")
     for form in forms:
         action = form.get("action", "")
@@ -212,7 +236,7 @@ async def active_fuzz_forms(soup, current_url, link_id, scan_id, websocket, db, 
         if not input_names:
             continue
             
-        await websocket.send_text(f"    [*] Fuzzing form at {form_url} with {len(input_names)} inputs...")
+        await emitter.log(f"    [*] Fuzzing form at {form_url} with {len(input_names)} inputs...")
         
         # Test SQLi
         if "sqli" in active_modules or "all" in active_modules:
@@ -233,7 +257,7 @@ async def active_fuzz_forms(soup, current_url, link_id, scan_id, websocket, db, 
                         db.add(finding)
                         db.commit()
                         vulns_found[0] += 1
-                        await websocket.send_text(f"    [!] CRITICAL: SQLi Anomaly Detected via 500 status.")
+                        await emitter.log(f"    [!] CRITICAL: SQLi Anomaly Detected via 500 status.")
                         break
                 except Exception:
                     pass
@@ -257,7 +281,7 @@ async def active_fuzz_forms(soup, current_url, link_id, scan_id, websocket, db, 
                         db.add(finding)
                         db.commit()
                         vulns_found[0] += 1
-                        await websocket.send_text(f"    [!] HIGH: Reflected XSS vulnerability confirmed.")
+                        await emitter.log(f"    [!] HIGH: Reflected XSS vulnerability confirmed.")
                         break
                 except Exception:
                     pass
@@ -281,13 +305,13 @@ async def active_fuzz_forms(soup, current_url, link_id, scan_id, websocket, db, 
                         db.add(finding)
                         db.commit()
                         vulns_found[0] += 1
-                        await websocket.send_text(f"    [!] CRITICAL: LFI Directory Traversal Detected.")
+                        await emitter.log(f"    [!] CRITICAL: LFI Directory Traversal Detected.")
                         break
                 except Exception:
                     pass
 
-async def fuzz_paths(target_url, domain, scan_id, websocket, db, vulns_found):
-    await websocket.send_text(f"[*] Fuzzing exposed sensitive paths...")
+async def fuzz_paths(target_url, domain, scan_id, emitter, db, vulns_found):
+    await emitter.log(f"[*] Fuzzing exposed sensitive paths...")
     base_url = target_url
     
     for path in SENSITIVE_PATHS:
@@ -303,16 +327,16 @@ async def fuzz_paths(target_url, domain, scan_id, websocket, db, vulns_found):
                 db.add(finding)
                 db.commit()
                 vulns_found[0] += 1
-                await websocket.send_text(f"    [!] CRITICAL DETECTED: Exposed configuration at {path}")
+                await emitter.log(f"    [!] CRITICAL DETECTED: Exposed configuration at {path}")
         except Exception:
             pass
 
 
-async def run_sqlmap_module(target_url, scan_id, websocket, db, vulns_found):
-    await websocket.send_text("[*] SQLMap module enabled. Running automated SQLi verification...")
+async def run_sqlmap_module(target_url, scan_id, emitter, db, vulns_found):
+    await emitter.log("[*] SQLMap module enabled. Running automated SQLi verification...")
 
     if not shutil.which("sqlmap"):
-        await websocket.send_text("    [-] SQLMap binary not found. Skipping SQLMap module.")
+        await emitter.log("    [-] SQLMap binary not found. Skipping SQLMap module.")
         return
 
     process = await asyncio.create_subprocess_exec(
@@ -325,10 +349,24 @@ async def run_sqlmap_module(target_url, scan_id, websocket, db, vulns_found):
     confirmed_sqli = False
     indicator_line = ""
     streamed_lines = 0
+    timed_out = False
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + SQLMAP_TIMEOUT_SECONDS
 
     if process.stdout:
         while True:
-            line = await process.stdout.readline()
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                timed_out = True
+                await emitter.log(f"    [!] SQLMap timeout reached ({SQLMAP_TIMEOUT_SECONDS}s). Stopping process...")
+                await _terminate_process(process)
+                break
+
+            try:
+                line = await asyncio.wait_for(process.stdout.readline(), timeout=min(1.0, remaining))
+            except asyncio.TimeoutError:
+                continue
+
             if not line:
                 break
 
@@ -337,7 +375,7 @@ async def run_sqlmap_module(target_url, scan_id, websocket, db, vulns_found):
                 continue
 
             if streamed_lines < 30:
-                await websocket.send_text(f"    [SQLMAP] {text_line}")
+                await emitter.log(f"    [SQLMAP] {text_line}")
                 streamed_lines += 1
 
             lower = text_line.lower()
@@ -349,7 +387,18 @@ async def run_sqlmap_module(target_url, scan_id, websocket, db, vulns_found):
                 confirmed_sqli = True
                 indicator_line = text_line
 
-    await process.wait()
+    await _terminate_process(process)
+
+    if timed_out:
+        await emitter.item_found(
+            {
+                "kind": "scanner_timeout",
+                "severity": "info",
+                "title": "SQLMAP_TIMEOUT",
+                "description": f"SQLMap exceeded the {SQLMAP_TIMEOUT_SECONDS}s budget and was stopped.",
+                "scanner": "sqlmap",
+            }
+        )
 
     if confirmed_sqli:
         finding = models.Finding(
@@ -364,16 +413,16 @@ async def run_sqlmap_module(target_url, scan_id, websocket, db, vulns_found):
         db.add(finding)
         db.commit()
         vulns_found[0] += 1
-        await websocket.send_text("    [!] CRITICAL: SQLMap confirmed a probable SQL Injection vector.")
+        await emitter.log("    [!] CRITICAL: SQLMap confirmed a probable SQL Injection vector.")
     else:
-        await websocket.send_text("    [i] SQLMap did not confirm SQLi on this run.")
+        await emitter.log("    [i] SQLMap did not confirm SQLi on this run.")
 
 
-async def run_nuclei_module(target_url, scan_id, websocket, db, vulns_found):
-    await websocket.send_text("[*] Nuclei module enabled. Running template-based checks...")
+async def run_nuclei_module(target_url, scan_id, emitter, db, vulns_found):
+    await emitter.log("[*] Nuclei module enabled. Running template-based checks...")
 
     if not shutil.which("nuclei"):
-        await websocket.send_text("    [-] Nuclei binary not found. Skipping Nuclei module.")
+        await emitter.log("    [-] Nuclei binary not found. Skipping Nuclei module.")
         return
 
     process = await asyncio.create_subprocess_exec(
@@ -385,10 +434,24 @@ async def run_nuclei_module(target_url, scan_id, websocket, db, vulns_found):
     )
 
     match_count = 0
+    timed_out = False
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + NUCLEI_TIMEOUT_SECONDS
 
     if process.stdout:
         while True:
-            line = await process.stdout.readline()
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                timed_out = True
+                await emitter.log(f"    [!] Nuclei timeout reached ({NUCLEI_TIMEOUT_SECONDS}s). Stopping process...")
+                await _terminate_process(process)
+                break
+
+            try:
+                line = await asyncio.wait_for(process.stdout.readline(), timeout=min(1.0, remaining))
+            except asyncio.TimeoutError:
+                continue
+
             if not line:
                 break
 
@@ -396,7 +459,7 @@ async def run_nuclei_module(target_url, scan_id, websocket, db, vulns_found):
             if not text_line:
                 continue
 
-            await websocket.send_text(f"    [NUCLEI] {text_line}")
+            await emitter.log(f"    [NUCLEI] {text_line}")
 
             if match_count >= 20:
                 continue
@@ -414,18 +477,29 @@ async def run_nuclei_module(target_url, scan_id, websocket, db, vulns_found):
             db.add(finding)
             match_count += 1
 
-    await process.wait()
+    await _terminate_process(process)
+
+    if timed_out:
+        await emitter.item_found(
+            {
+                "kind": "scanner_timeout",
+                "severity": "info",
+                "title": "NUCLEI_TIMEOUT",
+                "description": f"Nuclei exceeded the {NUCLEI_TIMEOUT_SECONDS}s budget and was stopped.",
+                "scanner": "nuclei",
+            }
+        )
 
     if match_count > 0:
         db.commit()
         vulns_found[0] += match_count
-        await websocket.send_text(f"    [!] Nuclei generated {match_count} persisted findings.")
+        await emitter.log(f"    [!] Nuclei generated {match_count} persisted findings.")
     else:
-        await websocket.send_text("    [i] Nuclei did not report actionable matches.")
+        await emitter.log("    [i] Nuclei did not report actionable matches.")
 
 
-async def run_api_security_module(target_url, scan_id, websocket, db, vulns_found):
-    await websocket.send_text("[*] API Security module enabled. Probing common API exposure surfaces...")
+async def run_api_security_module(target_url, scan_id, emitter, db, vulns_found):
+    await emitter.log("[*] API Security module enabled. Probing common API exposure surfaces...")
 
     findings_created = 0
     for path in API_DISCOVERY_PATHS:
@@ -449,7 +523,7 @@ async def run_api_security_module(target_url, scan_id, websocket, db, vulns_foun
             )
             db.add(finding)
             findings_created += 1
-            await websocket.send_text(f"    [!] {sev.upper()}: API exposure detected at {path}")
+            await emitter.log(f"    [!] {sev.upper()}: API exposure detected at {path}")
 
         allow_header = (res.headers.get("Allow") or "").upper()
         if res.status_code in (200, 204) and any(m in allow_header for m in ["PUT", "DELETE", "PATCH"]):
@@ -464,17 +538,17 @@ async def run_api_security_module(target_url, scan_id, websocket, db, vulns_foun
             )
             db.add(finding)
             findings_created += 1
-            await websocket.send_text(f"    [!] MEDIUM: Risky methods exposed at {path}")
+            await emitter.log(f"    [!] MEDIUM: Risky methods exposed at {path}")
 
     if findings_created:
         db.commit()
         vulns_found[0] += findings_created
     else:
-        await websocket.send_text("    [i] API Security module did not detect high-confidence exposures.")
+        await emitter.log("    [i] API Security module did not detect high-confidence exposures.")
 
 
-async def run_authenticated_scan_module(target_url, scan_id, websocket, db, vulns_found, auth_context=None):
-    await websocket.send_text("[*] Authenticated Scan module enabled. Testing access control boundaries...")
+async def run_authenticated_scan_module(target_url, scan_id, emitter, db, vulns_found, auth_context=None):
+    await emitter.log("[*] Authenticated Scan module enabled. Testing access control boundaries...")
 
     open_sensitive = []
     guarded_sensitive = []
@@ -483,9 +557,9 @@ async def run_authenticated_scan_module(target_url, scan_id, websocket, db, vuln
 
     has_auth_context = bool(auth_headers)
     if has_auth_context:
-        await websocket.send_text("    [i] Auth context provided. Running comparative auth/non-auth route probing.")
+        await emitter.log("    [i] Auth context provided. Running comparative auth/non-auth route probing.")
     else:
-        await websocket.send_text("    [i] No auth context provided. Running boundary-only checks.")
+        await emitter.log("    [i] No auth context provided. Running boundary-only checks.")
 
     for path in AUTH_PROTECTED_CANDIDATES:
         probe_url = urljoin(target_url.rstrip('/') + '/', path.lstrip('/'))
@@ -530,7 +604,7 @@ async def run_authenticated_scan_module(target_url, scan_id, websocket, db, vuln
         )
         db.add(finding)
         findings_created += 1
-        await websocket.send_text(f"    [!] HIGH: {len(open_sensitive)} sensitive route(s) reachable without auth challenge.")
+        await emitter.log(f"    [!] HIGH: {len(open_sensitive)} sensitive route(s) reachable without auth challenge.")
 
     if guarded_sensitive:
         sample = guarded_sensitive[:6]
@@ -545,7 +619,7 @@ async def run_authenticated_scan_module(target_url, scan_id, websocket, db, vuln
         )
         db.add(finding)
         findings_created += 1
-        await websocket.send_text("    [i] Authenticated boundaries detected on sensitive routes.")
+        await emitter.log("    [i] Authenticated boundaries detected on sensitive routes.")
 
     if has_auth_context and authenticated_access:
         sample = authenticated_access[:6]
@@ -560,17 +634,17 @@ async def run_authenticated_scan_module(target_url, scan_id, websocket, db, vuln
         )
         db.add(finding)
         findings_created += 1
-        await websocket.send_text("    [i] Authenticated context validated against sensitive endpoints.")
+        await emitter.log("    [i] Authenticated context validated against sensitive endpoints.")
 
     if findings_created:
         db.commit()
         vulns_found[0] += findings_created
     else:
-        await websocket.send_text("    [i] Authenticated Scan module did not produce findings.")
+        await emitter.log("    [i] Authenticated Scan module did not produce findings.")
 
 
-async def inspect_js_secrets(soup, current_url, link_id, scan_id, websocket, db, vulns_found):
-    await websocket.send_text("    [*] JS Secret Analysis: scanning inline and referenced scripts...")
+async def inspect_js_secrets(soup, current_url, link_id, scan_id, emitter, db, vulns_found):
+    await emitter.log("    [*] JS Secret Analysis: scanning inline and referenced scripts...")
 
     findings = []
 
@@ -624,17 +698,17 @@ async def inspect_js_secrets(soup, current_url, link_id, scan_id, websocket, db,
         db.add(finding)
         db.commit()
         vulns_found[0] += 1
-        await websocket.send_text(f"    [!] HIGH: JS Secret Analysis detected {len(unique)} potential secret artifact(s).")
+        await emitter.log(f"    [!] HIGH: JS Secret Analysis detected {len(unique)} potential secret artifact(s).")
     else:
-        await websocket.send_text("    [i] JS Secret Analysis found no high-confidence secret patterns.")
+        await emitter.log("    [i] JS Secret Analysis found no high-confidence secret patterns.")
 
 
-async def inspect_playwright_surface(soup, current_url, link_id, scan_id, websocket, db, vulns_found):
+async def inspect_playwright_surface(soup, current_url, link_id, scan_id, emitter, db, vulns_found):
     script_endpoints = set()
     internal_refs = set()
     network_endpoints = set()
 
-    await websocket.send_text("    [*] PLAYWRIGHT: Launching headless browser for JS/runtime inspection...")
+    await emitter.log("    [*] PLAYWRIGHT: Launching headless browser for JS/runtime inspection...")
 
     try:
         from playwright.async_api import async_playwright
@@ -655,7 +729,7 @@ async def inspect_playwright_surface(soup, current_url, link_id, scan_id, websoc
             try:
                 await page.goto(current_url, wait_until="networkidle", timeout=12000)
             except Exception:
-                await websocket.send_text("    [-] PLAYWRIGHT: Navigation timeout; collecting partial runtime telemetry.")
+                await emitter.log("    [-] PLAYWRIGHT: Navigation timeout; collecting partial runtime telemetry.")
 
             runtime_html = await page.content()
             runtime_soup = BeautifulSoup(runtime_html, 'html.parser')
@@ -671,7 +745,7 @@ async def inspect_playwright_surface(soup, current_url, link_id, scan_id, websoc
             await context.close()
             await browser.close()
     except Exception:
-        await websocket.send_text("    [-] PLAYWRIGHT runtime unavailable. Falling back to static JS analysis.")
+        await emitter.log("    [-] PLAYWRIGHT runtime unavailable. Falling back to static JS analysis.")
 
     for script in soup.find_all("script"):
         script_src = script.get("src")
@@ -715,7 +789,7 @@ async def inspect_playwright_surface(soup, current_url, link_id, scan_id, websoc
         db.add(finding)
         db.commit()
         vulns_found[0] += 1
-        await websocket.send_text(f"    [!] PLAYWRIGHT: JS surface mapped ({len(script_endpoints)} references).")
+        await emitter.log(f"    [!] PLAYWRIGHT: JS surface mapped ({len(script_endpoints)} references).")
 
     if internal_refs:
         sample_sensitive = sorted(internal_refs)[:8]
@@ -731,10 +805,10 @@ async def inspect_playwright_surface(soup, current_url, link_id, scan_id, websoc
         db.add(finding)
         db.commit()
         vulns_found[0] += 1
-        await websocket.send_text(f"    [!] HIGH: Potential internal endpoint references were exposed in JS.")
+        await emitter.log(f"    [!] HIGH: Potential internal endpoint references were exposed in JS.")
 
 
-async def perform_crawl(target_url: str, modules: str, websocket: WebSocket, db: Session, auth_context: dict | None = None):
+async def perform_crawl(target_url: str, modules: str, emitter: events.EventEmitter, db: Session, auth_context: dict | None = None):
     if not target_url.startswith("http"):
         target_url = "http://" + target_url
 
@@ -746,31 +820,42 @@ async def perform_crawl(target_url: str, modules: str, websocket: WebSocket, db:
     db.commit()
     db.refresh(scan_record)
 
-    await websocket.send_text(f"[+] INITIATING DAST ENGINE ON: {target_url}")
+    emitter.bind(scan_record.id)
     act_mod = {m.strip() for m in modules.split(",") if m.strip()}
     if not act_mod:
         act_mod = {"all"}
-    await websocket.send_text(f"[i] Active Modules: {modules}")
+
+    await emitter.emit(
+        "analysis_started",
+        {
+            "id": scan_record.id,
+            "target": target_url,
+            "scan_type": "crawler",
+            "modules": sorted(act_mod),
+        },
+    )
+    await emitter.log(f"[+] INITIATING DAST ENGINE ON: {target_url}")
+    await emitter.log(f"[i] Active Modules: {modules}")
     
     vulns_found_ref = [0]
     
     if ("tls" in act_mod or "all" in act_mod) and target_url.startswith("https"):
-        await audit_ssl(target_url, scan_record, websocket, db)
+        await audit_ssl(target_url, scan_record, emitter, db)
         
     if "brute" in act_mod or "all" in act_mod:
-        await fuzz_paths(target_url, domain, scan_record.id, websocket, db, vulns_found_ref)
+        await fuzz_paths(target_url, domain, scan_record.id, emitter, db, vulns_found_ref)
 
     if "sqlmap" in act_mod or "all" in act_mod:
-        await run_sqlmap_module(target_url, scan_record.id, websocket, db, vulns_found_ref)
+        await run_sqlmap_module(target_url, scan_record.id, emitter, db, vulns_found_ref)
 
     if "nuclei" in act_mod or "all" in act_mod:
-        await run_nuclei_module(target_url, scan_record.id, websocket, db, vulns_found_ref)
+        await run_nuclei_module(target_url, scan_record.id, emitter, db, vulns_found_ref)
 
     if "api_security" in act_mod or "all" in act_mod:
-        await run_api_security_module(target_url, scan_record.id, websocket, db, vulns_found_ref)
+        await run_api_security_module(target_url, scan_record.id, emitter, db, vulns_found_ref)
 
     if "auth_scan" in act_mod or "all" in act_mod:
-        await run_authenticated_scan_module(target_url, scan_record.id, websocket, db, vulns_found_ref, auth_context)
+        await run_authenticated_scan_module(target_url, scan_record.id, emitter, db, vulns_found_ref, auth_context)
     
     visited = set()
     to_visit = [target_url]
@@ -783,7 +868,7 @@ async def perform_crawl(target_url: str, modules: str, websocket: WebSocket, db:
             continue
             
         visited.add(current_url)
-        await websocket.send_text(f"[*] Scanning DOM: {current_url} ...")
+        await emitter.log(f"[*] Scanning DOM: {current_url} ...")
         
         try:
             response = await asyncio.to_thread(requests.get, current_url, timeout=5)
@@ -802,12 +887,12 @@ async def perform_crawl(target_url: str, modules: str, websocket: WebSocket, db:
 
             if "headers" in act_mod or "all" in act_mod:
                 messages = []
-                audit_headers_and_fingerprint(response, current_url, db_link.id, scan_record.id, websocket, db, vulns_found_ref, messages)
+                audit_headers_and_fingerprint(response, current_url, db_link.id, scan_record.id, emitter, db, vulns_found_ref, messages)
                 for m in messages:
-                    await websocket.send_text(m)
+                    await emitter.log(m)
 
             if "cors" in act_mod or "all" in act_mod:
-                await test_cors(current_url, db_link.id, scan_record.id, websocket, db, vulns_found_ref)
+                await test_cors(current_url, db_link.id, scan_record.id, emitter, db, vulns_found_ref)
 
             if "text/html" in db_link.content_type:
                 soup = BeautifulSoup(response.text, 'html.parser')
@@ -823,15 +908,15 @@ async def perform_crawl(target_url: str, modules: str, websocket: WebSocket, db:
                             cvss_score="7.4", poc_payload=f"URL: {current_url}\nProtocol: HTTP"
                         )
                         db.add(finding)
-                        await websocket.send_text(f"    [!] VULNERABILITY DETECTED: Insecure login form")
+                        await emitter.log(f"    [!] VULNERABILITY DETECTED: Insecure login form")
                         
-                await active_fuzz_forms(soup, current_url, db_link.id, scan_record.id, websocket, db, vulns_found_ref, act_mod)
+                await active_fuzz_forms(soup, current_url, db_link.id, scan_record.id, emitter, db, vulns_found_ref, act_mod)
 
                 if "playwright" in act_mod or "all" in act_mod:
-                    await inspect_playwright_surface(soup, current_url, db_link.id, scan_record.id, websocket, db, vulns_found_ref)
+                    await inspect_playwright_surface(soup, current_url, db_link.id, scan_record.id, emitter, db, vulns_found_ref)
 
                 if "js_secret" in act_mod or "all" in act_mod:
-                    await inspect_js_secrets(soup, current_url, db_link.id, scan_record.id, websocket, db, vulns_found_ref)
+                    await inspect_js_secrets(soup, current_url, db_link.id, scan_record.id, emitter, db, vulns_found_ref)
 
                 for link in soup.find_all('a', href=True):
                     href = link.get('href')
@@ -839,16 +924,26 @@ async def perform_crawl(target_url: str, modules: str, websocket: WebSocket, db:
                     
                     if urlparse(full_url).netloc == domain and full_url not in visited:
                         to_visit.append(full_url)
-                        await websocket.send_text(f"    [+] Discovered Link (Added to queue): {href}")
+                        await emitter.log(f"    [+] Discovered Link (Added to queue): {href}")
             
         except Exception as e:
-            await websocket.send_text(f"    [-] Request Error: {str(e)}")
+            await emitter.log(f"    [-] Request Error: {str(e)}")
 
     scan_record.status = "COMPLETED"
     db.commit()
 
-    await websocket.send_text(f"")
-    await websocket.send_text(f"[+] DAST ENGINE RUN #ID:{scan_record.id} COMPLETED.")
-    await websocket.send_text(f"- Total Links Scanned: {links_discovered}")
-    await websocket.send_text(f"- Issues Detected: {vulns_found_ref[0]}")
-    await websocket.close()
+    await emitter.log(f"")
+    await emitter.log(f"[+] DAST ENGINE RUN #ID:{scan_record.id} COMPLETED.")
+    await emitter.log(f"- Total Links Scanned: {links_discovered}")
+    await emitter.log(f"- Issues Detected: {vulns_found_ref[0]}")
+    await emitter.completed(
+        {
+            "total_items": vulns_found_ref[0],
+            "by_severity": {},
+            "links_scanned": links_discovered,
+        },
+        status=scan_record.status,
+        scan_id=scan_record.id,
+        target=target_url,
+    )
+    await emitter.close()

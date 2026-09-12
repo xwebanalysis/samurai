@@ -1,0 +1,44 @@
+:host {
+  display: block;
+  min-width: 0;
+}
+
+.metric-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  min-width: 0;
+}
+
+.metric-row {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-xs);
+  min-width: 0;
+}
+
+.metric-compact {
+  font-family: var(--font-data);
+  font-size: var(--body);
+  color: var(--text-primary);
+}
+
+.metric-unit {
+  margin-bottom: 10px;
+}
+
+.default {
+  color: var(--text-display);
+}
+
+.success {
+  color: var(--success);
+}
+
+.warning {
+  color: var(--warning);
+}
+
+.danger {
+  color: var(--accent);
+}

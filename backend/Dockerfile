@@ -1,4 +1,4 @@
-FROM mcr.microsoft.com/playwright/python:v1.52.0-jammy
+FROM mcr.microsoft.com/playwright/python:v1.62.0-jammy
 
 ARG NUCLEI_VERSION=3.3.9
 
@@ -32,9 +32,9 @@ RUN set -eux; \
 ENV PYTHONDONTWRITEBYTECODE 1
 ENV PYTHONUNBUFFERED 1
 
-COPY requirements.txt .
+COPY requirements.txt requirements-postgres.txt .
 
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt -r requirements-postgres.txt
 
 RUN playwright install chromium
 

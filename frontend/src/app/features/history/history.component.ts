@@ -1,18 +1,9 @@
 import { Component, OnInit, ChangeDetectorRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { HttpClient } from '@angular/common/http';
 import { Router } from '@angular/router';
-import { TranslatePipe } from '../../pipes/translate.pipe';
 
-interface ScanItem {
-  id: number;
-  domain_target: string;
-  status: string;
-  scan_type: string;
-  created_at: string;
-  findings: any[];
-  discovered_links?: any[];
-}
+import { ApiService, ScanListItem } from '../../core/api.service';
+import { TranslatePipe } from '../../core/translate.pipe';
 
 @Component({
   selector: 'app-history',
@@ -22,11 +13,15 @@ interface ScanItem {
   styleUrls: ['./history.component.scss']
 })
 export class HistoryComponent implements OnInit {
-  scans: ScanItem[] = [];
-  selectedScan: ScanItem | null = null;
+  scans: ScanListItem[] = [];
+  selectedScan: ScanListItem | null = null;
   isLoading = true;
 
-  constructor(private http: HttpClient, private cdr: ChangeDetectorRef, private router: Router) {}
+  constructor(
+    private api: ApiService,
+    private cdr: ChangeDetectorRef,
+    private router: Router
+  ) {}
 
   ngOnInit() {
     this.fetchHistory();
@@ -34,16 +29,16 @@ export class HistoryComponent implements OnInit {
 
   fetchHistory() {
     this.isLoading = true;
-    this.http.get<ScanItem[]>(`http://${window.location.hostname}:8000/api/scans`).subscribe({
+    this.api.listScans().subscribe({
       next: (data) => {
         this.scans = data;
         this.isLoading = false;
-        this.cdr.detectChanges();
+        this.cdr.markForCheck();
       },
       error: (err) => {
         console.error('Error fetching history:', err);
         this.isLoading = false;
-        this.cdr.detectChanges();
+        this.cdr.markForCheck();
       }
     });
   }
@@ -51,36 +46,36 @@ export class HistoryComponent implements OnInit {
   deleteScan(id: number, event: Event) {
     event.stopPropagation();
     if (!confirm('Are you sure you want to delete this scan and all its findings?')) return;
-    
-    this.http.delete(`http://${window.location.hostname}:8000/api/scans/${id}`).subscribe({
+
+    this.api.deleteScan(id).subscribe({
       next: () => {
         // Optimistic UI update
-        this.scans = this.scans.filter(s => s.id !== id);
+        this.scans = this.scans.filter((s) => s.id !== id);
         if (this.selectedScan && this.selectedScan.id === id) {
-             this.selectedScan = null;
+          this.selectedScan = null;
         }
-        this.cdr.detectChanges();
+        this.cdr.markForCheck();
       },
       error: (err) => console.error('Delete error', err)
     });
   }
 
   viewDetails(id: number) {
-    this.http.get<ScanItem>(`http://${window.location.hostname}:8000/api/scans/${id}`).subscribe({
+    this.api.getScan(id).subscribe({
       next: (data) => {
         this.selectedScan = data;
-        this.cdr.detectChanges();
+        this.cdr.markForCheck();
       },
       error: (err) => console.error('Detail error', err)
     });
   }
 
-  openScanInModule(scan: ScanItem) {
+  openScanInModule(scan: ScanListItem) {
     const route = this.resolveRouteByScan(scan);
     this.router.navigate([route], { queryParams: { scanId: scan.id } });
   }
 
-  private resolveRouteByScan(scan: ScanItem): string {
+  private resolveRouteByScan(scan: ScanListItem): string {
     const type = String(scan.scan_type || '').toLowerCase();
     if (type.includes('crawler') || (scan.discovered_links && scan.discovered_links.length > 0)) {
       return '/vulnerabilities';

@@ -1,18 +1,18 @@
-import { Component, Input, OnDestroy, OnInit } from '@angular/core';
+import { ChangeDetectorRef, Component, Input, OnDestroy, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { ActivatedRoute, Router } from '@angular/router';
 import { Subscription } from 'rxjs';
-import { TranslatePipe } from '../../../../pipes/translate.pipe';
-import { TranslationService } from '../../../../services/translation.service';
+import { TranslatePipe } from '../../../../core/translate.pipe';
+import { TranslationService } from '../../../../core/i18n.service';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { gzip } from 'pako';
 import { DiscoveredLink, Finding, ScanDetail, SeverityLevel } from '../../models/vulnerabilities.models';
 import { FindingsFiltersComponent } from './subcomponents/findings-filters/findings-filters.component';
-import { FindingsExportActionsComponent } from './subcomponents/findings-export-actions/findings-export-actions.component';
 import { FindingsAccordionComponent, FindingsNode } from './subcomponents/findings-accordion/findings-accordion.component';
 import { FindingsEmptyStateComponent } from './subcomponents/findings-empty-state/findings-empty-state.component';
 import { FindingsNoResultsComponent } from './subcomponents/findings-no-results/findings-no-results.component';
+import { ExportActionsComponent } from '../../../../shared/export-actions/export-actions.component';
 
 @Component({
   selector: 'app-vuln-findings-report',
@@ -21,7 +21,7 @@ import { FindingsNoResultsComponent } from './subcomponents/findings-no-results/
     CommonModule,
     TranslatePipe,
     FindingsFiltersComponent,
-    FindingsExportActionsComponent,
+    ExportActionsComponent,
     FindingsAccordionComponent,
     FindingsEmptyStateComponent,
     FindingsNoResultsComponent
@@ -36,7 +36,12 @@ export class VulnerabilitiesFindingsReportComponent implements OnInit, OnDestroy
   typeFilter = 'all';
   private querySub: Subscription | null = null;
 
-  constructor(private route: ActivatedRoute, private router: Router, public translationService: TranslationService) {}
+  constructor(
+    private route: ActivatedRoute,
+    private router: Router,
+    private cdr: ChangeDetectorRef,
+    public translationService: TranslationService
+  ) {}
 
   ngOnInit() {
     this.querySub = this.route.queryParamMap.subscribe((params) => {
@@ -49,6 +54,7 @@ export class VulnerabilitiesFindingsReportComponent implements OnInit, OnDestroy
         : 'all';
 
       this.typeFilter = typeFromQuery;
+      this.cdr.markForCheck();
     });
   }
 
@@ -239,16 +245,16 @@ export class VulnerabilitiesFindingsReportComponent implements OnInit, OnDestroy
     this.findingsNodes.forEach((node) => {
       node.findings.forEach((finding) => {
         rows.push({
-          scan_id: finding.scan_id,
+          scan_id: finding.scan_id ?? null,
           node_type: node.isGlobal ? 'global' : 'link',
           url: node.url,
           status_code: node.status_code,
           content_type: node.content_type,
           finding_type: finding.finding_type,
           severity: finding.severity,
-          cvss_score: finding.cvss_score,
+          cvss_score: finding.cvss_score ?? null,
           description: finding.description,
-          poc_payload: finding.poc_payload,
+          poc_payload: finding.poc_payload ?? null,
           matches_current_filters: this.matchesFilters(finding) ? 'true' : 'false'
         });
       });

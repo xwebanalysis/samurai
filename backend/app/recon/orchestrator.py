@@ -1,9 +1,8 @@
-from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Tuple
 
-from fastapi import WebSocket
 import asyncio
 
+from ..events import EventEmitter
 from .logger import ReconStreamLogger
 from .modules import (
     run_api_discovery,
@@ -41,10 +40,10 @@ def _expand_modules(recon_types: List[str]) -> List[str]:
 async def perform_web_recon(
     target: str,
     recon_types: List[str],
-    websocket: WebSocket,
+    emitter: EventEmitter,
     timeout_seconds: int = 300,
 ) -> Dict[str, Any]:
-    logger = ReconStreamLogger(websocket)
+    logger = ReconStreamLogger(emitter)
     selected_modules = _expand_modules(recon_types)
     all_results: Dict[str, Any] = {}
 
@@ -56,6 +55,7 @@ async def perform_web_recon(
     
     for module_key in selected_modules:
         phase_title, runner = AVAILABLE_MODULES[module_key]
+        await emitter.progress(module_key, phase_title)
         await logger.phase(phase_title)
         try:
             # Run with individual timeout
@@ -74,14 +74,5 @@ async def perform_web_recon(
     await logger.line(f"modules executed={','.join(selected_modules)}")
     await logger.line(f"sections collected={len(all_results)}")
     await logger.line("status=complete")
-
-    await websocket.send_json(
-        {
-            "type": "RECON_COMPLETE",
-            "target": target,
-            "results": all_results,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        }
-    )
 
     return all_results

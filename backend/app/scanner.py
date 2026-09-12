@@ -4,9 +4,9 @@ from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
 import requests
 from bs4 import BeautifulSoup
-from fastapi import WebSocket
 from sqlalchemy.orm import Session
-from . import models
+
+from . import events, models
 
 PORT_OPEN_PATTERN = re.compile(r"^(\d+)\/(tcp|udp)\s+open\s+([^\s]+)(?:\s+(.*))?$", re.IGNORECASE)
 
@@ -106,13 +106,14 @@ def _build_reflection_probe_url(current_url: str):
 async def _run_web_surface_scan(
     base_target: str,
     scan_record: models.Scan,
-    websocket: WebSocket,
+    emitter: events.EventEmitter,
     db: Session,
     collect_contacts: bool,
     scan_unsanitized: bool,
     max_pages: int,
 ):
-    await websocket.send_text("[*] WEB_APP_SURFACE module enabled. Crawling pages for app-layer exposure...")
+    await emitter.log("[*] WEB_APP_SURFACE module enabled. Crawling pages for app-layer exposure...")
+    await emitter.progress("web_surface", "crawling application surface")
 
     target_url = _ensure_web_target(base_target)
     domain = urlparse(target_url).netloc
@@ -172,7 +173,17 @@ async def _run_web_surface_scan(
                 db.add(finding)
                 db.commit()
                 contact_hits += 1
-                await websocket.send_text(f"    [WEB_CONTACT] {current_url} emails={len(emails)} phones={len(phones)}")
+                await emitter.progress(
+                    "web_surface",
+                    f"contact intel discovered in {current_url}",
+                    data={
+                        "url": current_url,
+                        "emails": emails,
+                        "phones": phones,
+                        "emails_count": len(emails),
+                        "phones_count": len(phones),
+                    },
+                )
 
         if scan_unsanitized:
             unsanitized_forms = _find_unsanitized_candidates(soup)
@@ -195,7 +206,17 @@ async def _run_web_surface_scan(
                     db.add(finding)
                 db.commit()
                 unsanitized_hits += len(unsanitized_forms)
-                await websocket.send_text(f"    [WEB_UNSANITIZED] {current_url} forms={len(unsanitized_forms)}")
+                await emitter.item_found(
+                    {
+                        "kind": "unsanitized_input",
+                        "severity": "medium",
+                        "title": "UNSANITIZED_INPUT_CANDIDATE",
+                        "description": f"Form fields without visible constraints in {current_url}",
+                        "url": current_url,
+                        "forms": len(unsanitized_forms),
+                        "items": unsanitized_forms,
+                    }
+                )
 
             probe_url = _build_reflection_probe_url(current_url)
             if probe_url:
@@ -214,7 +235,16 @@ async def _run_web_surface_scan(
                         db.add(finding)
                         db.commit()
                         reflected_hits += 1
-                        await websocket.send_text(f"    [WEB_UNSANITIZED] {current_url} reflected=true")
+                        await emitter.item_found(
+                            {
+                                "kind": "reflected_input",
+                                "severity": "high",
+                                "title": "REFLECTED_INPUT_ECHO",
+                                "description": f"Query probe reflected in {current_url}",
+                                "url": current_url,
+                                "probe_url": probe_url,
+                            }
+                        )
                 except Exception:
                     pass
 
@@ -224,8 +254,8 @@ async def _run_web_surface_scan(
             if _same_domain(full_url, domain) and full_url not in visited and full_url not in queue:
                 queue.append(full_url)
 
-    await websocket.send_text(f"[i] WEB_APP_SURFACE completed. pages_scanned={len(visited)}")
-    await websocket.send_text(
+    await emitter.log(f"[i] WEB_APP_SURFACE completed. pages_scanned={len(visited)}")
+    await emitter.log(
         f"[SUMMARY] WEB CRAWL: pages={len(visited)} | contacts={contact_hits} | unsanitized={unsanitized_hits} | reflected={reflected_hits}"
     )
 
@@ -236,9 +266,10 @@ async def _run_web_surface_scan(
         "reflected": reflected_hits,
     }
 
+
 async def perform_nmap_scan(
     target: str,
-    websocket: WebSocket,
+    emitter: events.EventEmitter,
     db: Session,
     profile: str = "quick",
     timeout_seconds: int = 180,
@@ -248,11 +279,10 @@ async def perform_nmap_scan(
     max_pages: int = 10,
 ):
     """
-    Ejecuta un escaneo de Nmap superficial (Top 100 ports y versiones) 
-    y transmite el progreso crudo línea a línea vía WebSocket.
+    Ejecuta un escaneo de Nmap superficial (Top 100 ports y versiones)
+    y transmite el progreso como envelopes ``Event`` de xwa-sdk.
     """
-    # 1. Crear el registro MOCK en BD
-    # (Para no ralentizar el test con un worker asíncrono puro, inyectaremos directo)
+    # 1. Crear el registro RUNNING en BD
     selected_profile = profile if profile in NMAP_PROFILES else "quick"
     selected_args = NMAP_PROFILES[selected_profile]
     effective_timeout = max(30, min(timeout_seconds, 900))
@@ -266,10 +296,20 @@ async def perform_nmap_scan(
     db.commit()
     db.refresh(scan_record)
 
-    await websocket.send_text(f"[SCAN_META] scan_id={scan_record.id}")
-    await websocket.send_text(f"[+] Starting nmap scan on target: {target}")
-    await websocket.send_text(f"[i] Profile: {selected_profile} | Timeout: {effective_timeout}s")
-    
+    emitter.bind(scan_record.id)
+    await emitter.emit(
+        "analysis_started",
+        {
+            "id": scan_record.id,
+            "target": target,
+            "scan_type": scan_type,
+            "profile": selected_profile,
+            "timeout": effective_timeout,
+        },
+    )
+    await emitter.log(f"[+] Starting nmap scan on target: {target}")
+    await emitter.log(f"[i] Profile: {selected_profile} | Timeout: {effective_timeout}s")
+
     # 2. Ejecutar nmap a nivel de OS
     try:
         process = await asyncio.create_subprocess_exec(
@@ -281,8 +321,8 @@ async def perform_nmap_scan(
     except FileNotFoundError:
         scan_record.status = "ERROR"
         db.commit()
-        await websocket.send_text("[!] Nmap binary not found in runtime environment.")
-        await websocket.close()
+        await emitter.error("DEPENDENCY_MISSING", "Nmap binary not found in runtime environment.")
+        await emitter.close()
         return
 
     # 3. Leer la salida estándar en vivo
@@ -290,12 +330,12 @@ async def perform_nmap_scan(
     timed_out = False
     loop = asyncio.get_running_loop()
     start_ts = loop.time()
-    
+
     if process.stdout:
         while True:
             if loop.time() - start_ts > effective_timeout:
                 timed_out = True
-                await websocket.send_text(f"[!] Scan timeout reached ({effective_timeout}s). Stopping nmap process...")
+                await emitter.log(f"[!] Scan timeout reached ({effective_timeout}s). Stopping nmap process...")
                 process.terminate()
                 break
 
@@ -307,10 +347,10 @@ async def perform_nmap_scan(
             if not line:
                 break
             text_line = line.decode('utf-8').rstrip()
-            
+
             # Streaming crudo a la terminal Frontend
-            await websocket.send_text(text_line)
-            
+            await emitter.log(text_line)
+
             # Simple heurística para sacar info básica superficialmente como "hallazgo"
             match = PORT_OPEN_PATTERN.match(text_line.strip())
             if match:
@@ -325,7 +365,9 @@ async def perform_nmap_scan(
                     "version": version,
                     "raw": text_line,
                 }
-                await websocket.send_text(f"[OPEN_PORT] {port}/{proto} {service} {version or 'n/a'}")
+                await emitter.item_found(
+                    events.open_port_item(port, proto, service, version, text_line)
+                )
 
     try:
         await asyncio.wait_for(process.wait(), timeout=8)
@@ -334,7 +376,7 @@ async def perform_nmap_scan(
         await process.wait()
     finally:
         ACTIVE_NMAP_PROCESSES.pop(scan_record.id, None)
-    
+
     # 4. Guardar resultados y marcar como finalizado
     if scan_record.status == "CANCELLED":
         pass
@@ -342,7 +384,7 @@ async def perform_nmap_scan(
         scan_record.status = "ERROR"
     else:
         scan_record.status = "COMPLETED" if process.returncode == 0 else "ERROR"
-    
+
     for key in sorted(open_ports_found.keys()):
         parsed = open_ports_found[key]
         finding = models.Finding(
@@ -357,29 +399,48 @@ async def perform_nmap_scan(
     db.commit()
 
     if open_ports_found:
-        await websocket.send_text("[SUMMARY] OPEN PORTS DISCOVERED:")
+        await emitter.log("[SUMMARY] OPEN PORTS DISCOVERED:")
         for key in sorted(open_ports_found.keys()):
             parsed = open_ports_found[key]
-            await websocket.send_text(
+            await emitter.log(
                 f"    - {parsed['port']}/{parsed['proto']} | {parsed['service']} | {parsed['version'] or 'n/a'}"
             )
     else:
-        await websocket.send_text("[SUMMARY] NO OPEN PORTS FOUND.")
+        await emitter.log("[SUMMARY] NO OPEN PORTS FOUND.")
 
     if web_scan and scan_record.status == "COMPLETED":
         web_summary = await _run_web_surface_scan(
             target,
             scan_record,
-            websocket,
+            emitter,
             db,
             collect_contacts=collect_contacts,
             scan_unsanitized=scan_unsanitized,
             max_pages=max_pages,
         )
-        await websocket.send_text(
+        await emitter.log(
             f"[SUMMARY] WEB REPORT READY: pages={web_summary['pages_scanned']} | contacts={web_summary['contacts']} | unsanitized={web_summary['unsanitized']} | reflected={web_summary['reflected']}"
         )
 
     status_label = "TIMEOUT" if timed_out else scan_record.status
-    await websocket.send_text(f"[+] Scan #ID:{scan_record.id} {status_label}. ({len(open_ports_found)} open ports saved).")
-    await websocket.close()
+    await emitter.log(f"[+] Scan #ID:{scan_record.id} {status_label}. ({len(open_ports_found)} open ports saved).")
+
+    ports = [
+        {
+            "port": open_ports_found[key]["port"],
+            "protocol": open_ports_found[key]["proto"],
+            "service": open_ports_found[key]["service"],
+            "version": open_ports_found[key]["version"] or "n/a",
+        }
+        for key in sorted(open_ports_found.keys())
+    ]
+    await emitter.completed(
+        {
+            "total_items": len(open_ports_found),
+            "by_severity": {"info": len(open_ports_found)} if open_ports_found else {},
+            "ports": ports,
+        },
+        status=scan_record.status,
+        scan_id=scan_record.id,
+    )
+    await emitter.close()

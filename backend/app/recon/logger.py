@@ -1,15 +1,14 @@
-from datetime import datetime
-from typing import Any
+from datetime import datetime, timezone
 
-from fastapi import WebSocket
+from ..events import EventEmitter
 
 
 class ReconStreamLogger:
-    def __init__(self, websocket: WebSocket) -> None:
-        self.websocket = websocket
+    def __init__(self, emitter: EventEmitter) -> None:
+        self.emitter = emitter
 
     async def line(self, message: str) -> None:
-        await self.websocket.send_text(f"[LOG] {message}\n")
+        await self.emitter.log(message)
 
     async def phase(self, title: str) -> None:
         await self.line("")
@@ -17,7 +16,7 @@ class ReconStreamLogger:
         await self.line("-" * 68)
 
     async def banner(self, target: str) -> None:
-        started = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+        started = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
         await self.line("+------------------------------------------------------------------+")
         await self.line("|                  SAMURAI WEB RECON ENGINE                        |")
         await self.line(f"| Target: {target:<56}|")

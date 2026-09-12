@@ -1,0 +1,7 @@
+<div class="metric-card" role="listitem" [attr.aria-label]="ariaLabel || label">
+  <span class="t-label">{{ label | t }}</span>
+  <span class="metric-row">
+    <span [class]="hero ? 't-display-xl' : 'metric-compact'" [ngClass]="tone">{{ value === null ? '-' : value }}</span>
+    <span class="metric-unit t-label" *ngIf="unit">{{ unit | t }}</span>
+  </span>
+</div>
