@@ -79,6 +79,11 @@
     </section>
   </div>
 
+  <div class="module-chart" *ngIf="isAllView()">
+    <h3 class="t-label">{{ 'MODULE OUTPUT' | t }}</h3>
+    <app-xwa-chart kind="h-bars" [data]="moduleChartData" title="Module output distribution"></app-xwa-chart>
+  </div>
+
   <div class="module-stack">
     <section class="module-section" *ngIf="shouldShow('surface-map')">
       <div class="module-header">

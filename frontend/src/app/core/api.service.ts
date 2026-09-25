@@ -3,6 +3,7 @@ import { Injectable, inject } from '@angular/core';
 import { Observable } from 'rxjs';
 
 import { environment } from '../../environments/environment';
+import { AuthService } from './auth.service';
 
 /** xwa-sdk ``Event`` envelope emitted by every samurai WebSocket endpoint. */
 export interface SamuraiEvent {
@@ -104,6 +105,8 @@ export interface HealthResponse {
   database: string;
   version: string;
   tool: string;
+  authEnabled?: boolean;
+  auth_enabled?: boolean;
 }
 
 export interface DatabaseExportRawResponse {
@@ -150,36 +153,45 @@ export interface ReconLiveParams {
 @Injectable({ providedIn: 'root' })
 export class ApiService {
   private readonly http = inject(HttpClient);
+  private readonly auth = inject(AuthService);
   private readonly apiUrl = environment.apiBaseUrl;
   private readonly wsUrl = environment.wsBaseUrl;
+
+  private get authHeaders(): Record<string, string> {
+    return this.auth.authHeaders();
+  }
 
   health(): Observable<HealthResponse> {
     return this.http.get<HealthResponse>(`${this.apiUrl}/api/health`);
   }
 
   listScans(): Observable<ScanListItem[]> {
-    return this.http.get<ScanListItem[]>(`${this.apiUrl}/api/scans`);
+    return this.http.get<ScanListItem[]>(`${this.apiUrl}/api/scans`, { headers: this.authHeaders });
   }
 
   getScan(id: number): Observable<ScanDetail> {
-    return this.http.get<ScanDetail>(`${this.apiUrl}/api/scans/${id}`);
+    return this.http.get<ScanDetail>(`${this.apiUrl}/api/scans/${id}`, { headers: this.authHeaders });
   }
 
   deleteScan(id: number): Observable<{ status: string; scan_id: number }> {
-    return this.http.delete<{ status: string; scan_id: number }>(`${this.apiUrl}/api/scans/${id}`);
+    return this.http.delete<{ status: string; scan_id: number }>(`${this.apiUrl}/api/scans/${id}`, {
+      headers: this.authHeaders
+    });
   }
 
   cancelScan(id: number): Observable<{ status: string; scan_id: number }> {
     return this.http.post<{ status: string; scan_id: number }>(
       `${this.apiUrl}/api/scan/cancel/${id}`,
-      {}
+      {},
+      { headers: this.authHeaders }
     );
   }
 
   exportDatabaseRaw(): Observable<HttpResponse<Blob>> {
     return this.http.get(`${this.apiUrl}/api/database/export/raw`, {
       responseType: 'blob',
-      observe: 'response'
+      observe: 'response',
+      headers: this.authHeaders
     });
   }
 
@@ -187,7 +199,7 @@ export class ApiService {
     return this.http.post(
       `${this.apiUrl}/api/database/export/encrypted`,
       { password },
-      { responseType: 'blob', observe: 'response' }
+      { responseType: 'blob', observe: 'response', headers: this.authHeaders }
     );
   }
 
@@ -207,7 +219,7 @@ export class ApiService {
       scan_unsanitized: String(params.scanUnsanitized),
       max_pages: String(params.maxPages)
     });
-    return `${this.wsUrl}/api/scan/live?${query.toString()}`;
+    return this.auth.appendToken(`${this.wsUrl}/api/scan/live?${query.toString()}`);
   }
 
   /** Live DAST crawler stream. */
@@ -231,7 +243,7 @@ export class ApiService {
       query.set('auth_cookie', params.cookieHeader.trim());
     }
 
-    return `${this.wsUrl}/api/vuln/live?${query.toString()}`;
+    return this.auth.appendToken(`${this.wsUrl}/api/vuln/live?${query.toString()}`);
   }
 
   /** Live recon stream (direct backend). */
@@ -241,7 +253,7 @@ export class ApiService {
       recon_types: params.modules.join(','),
       timeout: String(params.timeout ?? 300)
     });
-    return `${this.wsUrl}/api/recon/live?${query.toString()}`;
+    return this.auth.appendToken(`${this.wsUrl}/api/recon/live?${query.toString()}`);
   }
 
   /**
@@ -256,7 +268,9 @@ export class ApiService {
       timeout: String(params.timeout ?? 300)
     });
     const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const proxy = `${wsProtocol}//${window.location.host}/api/recon/live?${query.toString()}`;
+    const proxy = this.auth.appendToken(
+      `${wsProtocol}//${window.location.host}/api/recon/live?${query.toString()}`
+    );
     return Array.from(new Set([direct, proxy]));
   }
 }

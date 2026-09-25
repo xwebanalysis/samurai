@@ -6,6 +6,19 @@
     </div>
   </header>
 
+  <section class="panel charts-panel" *ngIf="!isLoading && scans.length > 0">
+    <div class="charts-grid">
+      <div class="chart-block">
+        <h2 class="t-label">{{ 'SCANS PER DAY' | t }}</h2>
+        <app-xwa-chart kind="line" [data]="scansPerDayData" title="Scans per day"></app-xwa-chart>
+      </div>
+      <div class="chart-block">
+        <h2 class="t-label">{{ 'SCAN STATUS' | t }}</h2>
+        <app-xwa-chart kind="donut" [data]="statusChartData" unit="SCANS" title="Scan status distribution"></app-xwa-chart>
+      </div>
+    </div>
+  </section>
+
   <div class="dashboard-grid archive-grid">
     
     <!-- LEFT: Listado de Scans -->

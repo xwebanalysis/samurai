@@ -103,6 +103,11 @@
     </article>
   </div>
 
+  <div class="severity-chart">
+    <h3 class="t-label">{{ 'FINDINGS BY SEVERITY' | t }}</h3>
+    <app-xwa-chart kind="h-bars" [data]="severityChartData" title="Findings by severity"></app-xwa-chart>
+  </div>
+
   <article class="trend-module" *ngIf="trendSnapshots.length">
     <div class="trend-head">
       <span class="t-label">{{ 'RISK TREND / LAST' | t }} {{ trendSnapshots.length }} {{ 'SCANS' | t }}</span>

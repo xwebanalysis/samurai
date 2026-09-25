@@ -52,6 +52,32 @@
         <span>{{ themeService.nextThemeLabel() }}</span>
       </button>
       </div>
+      <div class="auth-panel" *ngIf="authService.authEnabled()">
+        <form *ngIf="!authService.token(); else authedBlock" class="auth-form" (submit)="submitLogin($event)">
+          <label class="t-label" for="auth-password">{{ 'AUTH PASSWORD' | t }}</label>
+          <div class="auth-row">
+            <input
+              id="auth-password"
+              class="auth-input"
+              type="password"
+              autocomplete="current-password"
+              [value]="authPassword"
+              (input)="authPassword = $any($event.target).value"
+              [attr.aria-label]="'Admin password' | t"
+            />
+            <button type="submit" class="btn-sm auth-btn" [disabled]="authService.loginBusy()">
+              {{ (authService.loginBusy() ? 'WAITING...' : 'LOGIN') | t }}
+            </button>
+          </div>
+          <span class="t-label text-accent" *ngIf="authService.loginError()">[ {{ (authService.loginError() ?? 'invalid-credentials') | t }} ]</span>
+        </form>
+        <ng-template #authedBlock>
+          <div class="auth-session">
+            <span class="t-label text-success">[ AUTH SESSION ]</span>
+            <button type="button" class="btn-sm" (click)="logout()">{{ 'LOGOUT' | t }}</button>
+          </div>
+        </ng-template>
+      </div>
       <div class="social-links">
         <a href="https://github.com/xwebanalysis" target="_blank" rel="noopener noreferrer" class="icon-link" aria-label="Open xwebanalysis GitHub profile in a new tab">
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 25" fill="currentColor" aria-hidden="true" focusable="false">

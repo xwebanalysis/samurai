@@ -171,6 +171,8 @@ npm run build   # @angular/build:application (production)</code></pre>
   <tr><td><code>XWA_CORS_ORIGINS</code></td><td>localhost/LAN regex</td><td>Allowed origins (comma-separated)</td></tr>
   <tr><td><code>SAMURAI_RATE_LIMIT_MAX</code></td><td><code>120</code></td><td>Requests per window per IP (0 disables)</td></tr>
   <tr><td><code>SAMURAI_RATE_LIMIT_WINDOW</code></td><td><code>60</code></td><td>Rate-limit window in seconds</td></tr>
+  <tr><td><code>SAMURAI_JWT_SECRET</code></td><td>—</td><td>Enables JWT auth + RBAC when set (POST <code>/api/auth/login</code> issues tokens; WebSockets take <code>?token=</code>)</td></tr>
+  <tr><td><code>SAMURAI_ADMIN_PASSWORD</code></td><td><code>changeme</code></td><td>Admin password for <code>/api/auth/login</code> (role <code>admin</code>; analysts are read-only)</td></tr>
 </table>
 
 <h2>Tests</h2>

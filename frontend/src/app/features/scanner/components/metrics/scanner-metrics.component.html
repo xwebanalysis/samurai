@@ -25,6 +25,11 @@
     ></app-metric-card>
   </div>
 
+  <div class="surface-chart">
+    <h3 class="t-label">{{ 'SURFACE_FINDINGS' | t }}</h3>
+    <app-xwa-chart kind="donut" [data]="surfaceChartData" unit="FINDINGS" title="Surface findings distribution"></app-xwa-chart>
+  </div>
+
   <div class="open-ports-wrap" *ngIf="openPortsDetailed.length">
     <span class="t-label">{{ 'OPEN_PORTS_DETECTED' | t }}</span>
     <div class="open-ports-grid" role="list" [attr.aria-label]="'Open ports detected' | t">
