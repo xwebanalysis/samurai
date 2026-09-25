@@ -4,11 +4,16 @@ import { Router } from '@angular/router';
 
 import { ApiService, ScanListItem } from '../../core/api.service';
 import { TranslatePipe } from '../../core/translate.pipe';
+import {
+  XwaChartComponent,
+  XwaChartColorKey,
+  XwaChartDatum
+} from '../../shared/charts/xwa-chart.component';
 
 @Component({
   selector: 'app-history',
   standalone: true,
-  imports: [CommonModule, TranslatePipe],
+  imports: [CommonModule, TranslatePipe, XwaChartComponent],
   templateUrl: './history.component.html',
   styleUrls: ['./history.component.scss']
 })
@@ -16,6 +21,37 @@ export class HistoryComponent implements OnInit {
   scans: ScanListItem[] = [];
   selectedScan: ScanListItem | null = null;
   isLoading = true;
+
+  get statusChartData(): XwaChartDatum[] {
+    const counts = new Map<string, number>();
+    for (const scan of this.scans) {
+      const key = String(scan.status || 'UNKNOWN').toUpperCase();
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    return [...counts.entries()].map(([label, value]) => ({
+      label,
+      value,
+      color: this.statusColor(label)
+    }));
+  }
+
+  get scansPerDayData(): XwaChartDatum[] {
+    const byDay = new Map<string, number>();
+    for (const scan of this.scans) {
+      const day = String(scan.created_at || '').slice(0, 10) || 'UNKNOWN';
+      byDay.set(day, (byDay.get(day) ?? 0) + 1);
+    }
+    return [...byDay.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([label, value]) => ({ label, value }));
+  }
+
+  private statusColor(status: string): XwaChartColorKey {
+    if (status === 'COMPLETED') return 'success';
+    if (status === 'RUNNING' || status === 'PENDING') return 'warning';
+    if (status === 'FAILED' || status === 'CANCELLED' || status === 'ERROR') return 'critical';
+    return 'neutral-strong';
+  }
 
   constructor(
     private api: ApiService,

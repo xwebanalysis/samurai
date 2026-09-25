@@ -22,6 +22,7 @@ def test_health_contract(client):
         "database": "ok",
         "version": APP_VERSION,
         "tool": "samurai",
+        "auth_enabled": False,
     }
 
 

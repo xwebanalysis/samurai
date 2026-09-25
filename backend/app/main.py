@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse, Response
 from sqlalchemy.orm import Session, joinedload
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from . import crawler, database, db_exporter, events, models, scanner
+from . import auth, crawler, database, db_exporter, events, models, scanner
 from .middleware import RateLimitMiddleware
 from .recon import perform_web_recon
 
@@ -134,7 +134,38 @@ def health():
         "database": "ok" if db_ok else "error",
         "version": APP_VERSION,
         "tool": TOOL_NAME,
+        "auth_enabled": auth.auth_enabled(),
     }
+
+
+@app.post("/api/auth/login")
+def auth_login(payload: dict):
+    if not auth.auth_enabled():
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": {
+                    "code": "BAD_REQUEST",
+                    "message": "Authentication is disabled (SAMURAI_JWT_SECRET not set).",
+                    "detail": {},
+                    "retryable": False,
+                }
+            },
+        )
+    password = str(payload.get("password", ""))
+    if not auth.verify_admin_password(password):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    token = auth.create_access_token(subject="admin", role="admin")
+    return {"token": token, "token_type": "bearer", "role": "admin"}
+
+
+async def _reject_unauthenticated_ws(websocket: WebSocket) -> bool:
+    """Accept then validate; return True when the WS client may proceed."""
+    await websocket.accept()
+    if await auth.websocket_require_user(websocket):
+        return True
+    await websocket.close(code=4401, reason="unauthorized")
+    return False
 
 
 @app.websocket("/api/scan/live")
@@ -149,7 +180,8 @@ async def websocket_scan(
     max_pages: int = 10,
     db: Session = Depends(database.get_db)
 ):
-    await websocket.accept()
+    if not await _reject_unauthenticated_ws(websocket):
+        return
     emitter = events.EventEmitter(websocket, tool=TOOL_NAME)
     try:
         await scanner.perform_nmap_scan(
@@ -186,7 +218,8 @@ async def websocket_vuln_crawler(
     auth_cookie: str = "",
     db: Session = Depends(database.get_db)
 ):
-    await websocket.accept()
+    if not await _reject_unauthenticated_ws(websocket):
+        return
     emitter = events.EventEmitter(websocket, tool=TOOL_NAME)
     try:
         auth_context = {
@@ -216,7 +249,8 @@ async def websocket_recon(
     timeout: int = 300,
     db: Session = Depends(database.get_db)
 ):
-    await websocket.accept()
+    if not await _reject_unauthenticated_ws(websocket):
+        return
     emitter = events.EventEmitter(websocket, tool=TOOL_NAME)
     scan_record = None
 
@@ -299,7 +333,10 @@ async def websocket_recon(
 # --- CRUD PARA HISTORIAL DE ANALISIS ---
 
 @app.get("/api/scans")
-def list_scans(db: Session = Depends(database.get_db)):
+def list_scans(
+    user: dict = Depends(auth.require_user),
+    db: Session = Depends(database.get_db)
+):
     scans = db.query(models.Scan).order_by(models.Scan.id.desc()).all()
     return scans
 
@@ -313,7 +350,11 @@ def _load_scan_detail(db: Session, scan_id: int):
 
 
 @app.get("/api/scans/{scan_id}")
-def get_scan_details(scan_id: int, db: Session = Depends(database.get_db)):
+def get_scan_details(
+    scan_id: int,
+    user: dict = Depends(auth.require_user),
+    db: Session = Depends(database.get_db)
+):
     scan = _load_scan_detail(db, scan_id)
     if not scan:
         raise HTTPException(status_code=404, detail="Scan not found")
@@ -321,7 +362,11 @@ def get_scan_details(scan_id: int, db: Session = Depends(database.get_db)):
 
 
 @app.delete("/api/scans/{scan_id}")
-def delete_scan(scan_id: int, db: Session = Depends(database.get_db)):
+def delete_scan(
+    scan_id: int,
+    user: dict = Depends(auth.require_admin),
+    db: Session = Depends(database.get_db)
+):
     scan = db.query(models.Scan).filter(models.Scan.id == scan_id).first()
     if not scan:
         raise HTTPException(status_code=404, detail="Scan not found")
@@ -331,7 +376,11 @@ def delete_scan(scan_id: int, db: Session = Depends(database.get_db)):
 
 
 @app.post("/api/scan/cancel/{scan_id}")
-def cancel_scan(scan_id: int, db: Session = Depends(database.get_db)):
+def cancel_scan(
+    scan_id: int,
+    user: dict = Depends(auth.require_admin),
+    db: Session = Depends(database.get_db)
+):
     cancelled = scanner.request_cancel_scan(scan_id, db)
     if not cancelled:
         raise HTTPException(status_code=404, detail="Running scan not found")
@@ -424,13 +473,20 @@ def _analysis_csv_rows(detail: dict) -> list[list[str]]:
 
 
 @app.get("/api/analyses")
-def list_analyses(db: Session = Depends(database.get_db)):
+def list_analyses(
+    user: dict = Depends(auth.require_user),
+    db: Session = Depends(database.get_db)
+):
     scans = db.query(models.Scan).order_by(models.Scan.id.desc()).all()
     return [_scan_to_analysis(scan) for scan in scans]
 
 
 @app.get("/api/analyses/{analysis_id}")
-def get_analysis(analysis_id: int, db: Session = Depends(database.get_db)):
+def get_analysis(
+    analysis_id: int,
+    user: dict = Depends(auth.require_user),
+    db: Session = Depends(database.get_db)
+):
     scan = _load_scan_detail(db, analysis_id)
     if not scan:
         raise HTTPException(status_code=404, detail="Analysis not found")
@@ -438,7 +494,11 @@ def get_analysis(analysis_id: int, db: Session = Depends(database.get_db)):
 
 
 @app.delete("/api/analyses/{analysis_id}")
-def delete_analysis(analysis_id: int, db: Session = Depends(database.get_db)):
+def delete_analysis(
+    analysis_id: int,
+    user: dict = Depends(auth.require_admin),
+    db: Session = Depends(database.get_db)
+):
     scan = db.query(models.Scan).filter(models.Scan.id == analysis_id).first()
     if not scan:
         raise HTTPException(status_code=404, detail="Analysis not found")
@@ -448,7 +508,12 @@ def delete_analysis(analysis_id: int, db: Session = Depends(database.get_db)):
 
 
 @app.get("/api/analyses/{analysis_id}/export")
-def export_analysis(analysis_id: int, format: str = "json", db: Session = Depends(database.get_db)):
+def export_analysis(
+    analysis_id: int,
+    format: str = "json",
+    user: dict = Depends(auth.require_user),
+    db: Session = Depends(database.get_db)
+):
     export_format = (format or "json").strip().lower()
     if export_format not in {"json", "csv"}:
         raise HTTPException(status_code=400, detail="format must be 'json' or 'csv'")
@@ -481,7 +546,10 @@ def export_analysis(analysis_id: int, format: str = "json", db: Session = Depend
 # --- DATABASE EXPORTS (raw + encrypted, TUI-compatible) ---
 
 @app.get("/api/database/export/raw")
-def export_database_raw(db: Session = Depends(database.get_db)):
+def export_database_raw(
+    user: dict = Depends(auth.require_admin),
+    db: Session = Depends(database.get_db)
+):
     payload = db_exporter.build_export_payload(db)
     json_bytes = json.dumps(payload, indent=2, ensure_ascii=False).encode("utf-8")
     return Response(
@@ -494,7 +562,11 @@ def export_database_raw(db: Session = Depends(database.get_db)):
 
 
 @app.post("/api/database/export/encrypted")
-async def export_database_encrypted(payload: dict, db: Session = Depends(database.get_db)):
+async def export_database_encrypted(
+    payload: dict,
+    user: dict = Depends(auth.require_admin),
+    db: Session = Depends(database.get_db)
+):
     password = payload.get("password", "")
 
     if not password or len(password) < 4:

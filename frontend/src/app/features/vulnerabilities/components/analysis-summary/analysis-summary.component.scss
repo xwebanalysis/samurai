@@ -262,3 +262,15 @@
     font-size: 38px;
   }
 }
+
+.severity-chart {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  margin-top: var(--space-md);
+  min-width: 0;
+
+  h3 {
+    margin: 0;
+  }
+}

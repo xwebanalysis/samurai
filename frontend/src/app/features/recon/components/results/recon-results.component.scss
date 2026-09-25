@@ -342,3 +342,15 @@
     grid-template-columns: 1fr;
   }
 }
+
+.module-chart {
+  margin-top: var(--space-md);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  min-width: 0;
+
+  h3 {
+    margin: 0;
+  }
+}

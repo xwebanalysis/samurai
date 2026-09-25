@@ -362,6 +362,14 @@ export class VulnerabilitiesComponent implements OnInit, OnDestroy {
       });
     });
 
+    // Direct scan-level findings (open ports, subprocess output) count too.
+    (scanDetails.findings || []).forEach((finding) => {
+      if (finding.severity === 'critical') critical++;
+      else if (finding.severity === 'high') high++;
+      else if (finding.severity === 'medium') medium++;
+      else low++;
+    });
+
     const totalFindings = critical + high + medium + low;
     const cleanLinks = Math.max(totalLinks - vulnerableLinks, 0);
     const coveragePct = totalLinks > 0 ? Math.round((vulnerableLinks / totalLinks) * 100) : 0;

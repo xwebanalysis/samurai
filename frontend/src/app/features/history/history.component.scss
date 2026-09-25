@@ -8,6 +8,33 @@
     grid-template-columns: 350px 1fr !important;
 }
 
+.charts-panel {
+    margin-bottom: var(--space-xl);
+    max-height: none;
+    overflow: visible;
+}
+
+.charts-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-xl);
+
+    @media (max-width: 900px) {
+        grid-template-columns: 1fr;
+    }
+}
+
+.chart-block {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-sm);
+    min-width: 0;
+
+    h2 {
+        margin: 0;
+    }
+}
+
 .panel {
     padding: var(--space-lg);
     border: 1px solid var(--border-visible);

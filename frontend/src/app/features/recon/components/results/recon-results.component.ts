@@ -1,6 +1,10 @@
 import { CommonModule } from '@angular/common';
 import { Component, Input } from '@angular/core';
 import { TranslatePipe } from '../../../../core/translate.pipe';
+import {
+  XwaChartComponent,
+  XwaChartDatum
+} from '../../../../shared/charts/xwa-chart.component';
 import { ReconResults, ReconResultsViewId } from '../../models/recon.models';
 import { ReconApiResultsComponent } from './components/recon-api-results.component';
 import { ReconDnsResultsComponent } from './components/recon-dns-results.component';
@@ -18,7 +22,8 @@ import { ReconTechResultsComponent } from './components/recon-tech-results.compo
     ReconSubdomainsResultsComponent,
     ReconApiResultsComponent,
     ReconHeadersResultsComponent,
-    ReconTechResultsComponent
+    ReconTechResultsComponent,
+    XwaChartComponent
   ],
   templateUrl: './recon-results.component.html',
   styleUrl: './recon-results.component.scss'
@@ -80,6 +85,16 @@ export class ReconResultsComponent {
 
   totalSections(): number {
     return 8;
+  }
+
+  get moduleChartData(): XwaChartDatum[] {
+    return [
+      { label: 'DNS', value: this.dnsTotal(), color: 'info' },
+      { label: 'SUBDOMAINS', value: this.subdomainTotal(), color: 'interactive' },
+      { label: 'APIS', value: this.apiTotal(), color: 'success' },
+      { label: 'HEADERS', value: this.headerPresentTotal(), color: 'warning' },
+      { label: 'TECH', value: this.techSignalTotal(), color: 'neutral-strong' }
+    ];
   }
 
   isAllView(): boolean {
