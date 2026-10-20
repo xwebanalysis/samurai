@@ -3,7 +3,8 @@ name = "samurai-tui"
 version = "2.5.0"
 edition = "2021"
 description = "Samurai Cybersecurity Platform — Terminal Edition"
-license = "MIT"
+license-file = "../LICENSE"
+publish = false
 
 [dependencies]
 ratatui = "0.29"
