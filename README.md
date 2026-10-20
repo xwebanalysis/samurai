@@ -240,3 +240,8 @@ npm run build   # @angular/build:application (production)</code></pre>
 </a>
 
 </div>
+
+## License
+
+Proprietary — All rights reserved. See [LICENSE](LICENSE) for the full terms.
+For permission requests: x@xscriptor.com
